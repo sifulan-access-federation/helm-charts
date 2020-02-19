@@ -1,0 +1,122 @@
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "ember.fullname" . }}
+  labels:
+    app: {{ template "ember.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "ember.name" . }}
+        release: {{ .Release.Name }}
+      annotations:
+        {{- include "ember.deploymentAnnotations" . | nindent 8 }}
+        # Init containers not updated on upgrade : https://github.com/kubernetes/helm/issues/2702
+        {{- if semverCompare "<1.8-0" .Capabilities.KubeVersion.GitVersion }}
+        pod.alpha.kubernetes.io/init-containers: null
+        pod.beta.kubernetes.io/init-containers: null
+        {{- end }}
+    spec:
+      affinity:
+        {{- if .Values.additionalAffinities }}
+        {{- toYaml .Values.additionalAffinities | nindent 8 }}
+        {{- end }}
+        {{- if eq .Values.antiAffinity "hard" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: {{ template "ember.name" . }}
+                  release: {{ .Release.Name }}
+        {{- else if eq .Values.antiAffinity "soft" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: {{ template "ember.name" . }}
+                    release: {{ .Release.Name }}
+        {{- end }}
+      initContainers:
+        - name: {{ .Values.name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |-
+              set -e
+              {{ if hasKey .Values.configFiles "config.json" -}}
+              node /code/replace-config.js
+              {{- end }}
+              cp -Rf /code/dist/* /static/
+          env:
+            {{- include "ember.environment" . | indent 12 }}
+          volumeMounts:
+            - name: static
+              mountPath: /static
+            {{- if hasKey .Values.configFiles "config.json" }}
+            - name: config
+              mountPath: /code/replace-config.js
+              subPath: replace-config.js
+              readOnly: true
+            - name: config
+              mountPath: /code/config.json
+              subPath: config.json
+              readOnly: true
+            {{- end }}
+            {{- include "ember.volumeMounts" . | nindent 12 }}
+      containers:
+        - name: {{ .Values.nginx.name }}
+          image: "{{ .Values.nginx.image.repository }}:{{ .Values.nginx.image.tag }}"
+          imagePullPolicy: {{ .Values.nginx.image.pullPolicy }}
+          command:
+            - nginx
+            - -c
+            - /etc/nginx/nginx.conf
+            - -g
+            - daemon off;
+          env:
+            {{- include "ember.environment" . | indent 12 }}
+          volumeMounts:
+            - mountPath: /static
+              name: static
+              readOnly: true
+            - mountPath: /etc/nginx/nginx.conf
+              name: config
+              subPath: nginx.conf
+              readOnly: true
+            - mountPath: /static/robots.txt
+              name: config
+              subPath: robots.txt
+              readOnly: true
+          ports:
+            - containerPort: {{ .Values.service.internalPort }}
+          # livenessProbe:
+          #   httpGet:
+          #     path: /healthz
+          #     port: {{ .Values.service.internalPort }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.service.internalPort }}
+          resources:
+            {{- toYaml .Values.nginx.resources | nindent 12 }}
+      volumes:
+        - name: static
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: {{ template "ember.fullname" . }}
+    {{- if .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+    {{- end }}

@@ -1,0 +1,6 @@
+dependencies:
+- name: ember
+  repository: https://centerforopenscience.github.io/helm-charts/
+  version: 0.4.0
+digest: sha256:da01ea450e142189a92149a3540a8d242bd9b66b9c9f0f38dba33f8842c27ee4
+generated: 2018-09-24T17:04:32.212732-04:00

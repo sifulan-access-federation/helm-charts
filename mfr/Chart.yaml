@@ -1,0 +1,14 @@
+apiVersion: v1
+description: A Helm chart for Kubernetes
+name: mfr
+version: 0.7.2
+keywords:
+  - renderer
+sources:
+  - https://github.com/centerforopenscience/modular-file-renderer
+maintainers:
+  - name: Matt Frazier
+    email: matt@cos.io
+    url: https://github.com/mfraezz
+engine: gotpl
+tillerVersion: '>=2.7.0'

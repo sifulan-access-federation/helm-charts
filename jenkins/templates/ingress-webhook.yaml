@@ -1,0 +1,45 @@
+{{- if and .Values.ingress.enabled .Values.ingress.webhook.enabled -}}
+{{- $serviceName := include "jenkins.fullname" . -}}
+{{- $servicePort := .Values.service.externalPort -}}
+{{- $ingressPaths := .Values.ingress.webhook.paths -}}
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: {{ template "jenkins.fullname" . }}-webhook
+  labels:
+    app: {{ template "jenkins.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    component: webhook
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+  annotations:
+    {{- range $key, $value := .Values.ingress.webhook.annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  rules:
+    {{- range $host := .Values.ingress.webhook.hosts }}
+    - host: {{ $host }}
+      http:
+        paths:
+          {{- range $ingressPaths }}
+          - path: {{ . }}
+            backend:
+              serviceName: {{ $serviceName }}-webhook
+              servicePort: {{ $servicePort }}
+          {{- end -}}
+    {{- end -}}
+  {{- if (or .Values.ingress.webhook.tls (and .Values.ingress.webhook.certificate.enabled .Values.ingress.webhook.certificate.tls)) }}
+  tls:
+    {{- if .Values.ingress.webhook.tls }}
+    {{- toYaml .Values.ingress.webhook.tls | nindent 4 }}
+    {{- end -}}
+    {{- if (and .Values.ingress.webhook.certificate.enabled .Values.ingress.webhook.certificate.tls) }}
+    - secretName: "{{ template "jenkins.webhook.certificate.fullname" . }}"
+      hosts:
+        {{- range .Values.ingress.webhook.certificate.acmeConfig.domains }}
+        - {{ . }}
+        {{- end }}
+    {{- end -}}
+  {{- end }}
+{{- end -}}

@@ -1,0 +1,1924 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "osf.fullname" . }}
+  labels:
+    app: {{ template "osf.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+data:
+{{- define "osf.inlineconfigs" }}
+{{- $osfPreprints := (index .Values "osf-preprints") }}
+{{- $osfReviews := (index .Values "osf-reviews") }}
+{{- $osfWeb := (index .Values "osf-web") }}
+default.conf: ''
+admin-nginx.conf: |-
+  user nginx;
+  worker_processes {{ .Values.admin.nginx.workerCount }};
+
+  load_module /usr/lib/nginx/modules/ngx_http_brotli_filter_module.so;
+  {{- if .Values.admin.nginx.vts.enabled }}
+  load_module /usr/lib/nginx/modules/ngx_http_geoip_module.so;
+  load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+  {{- end }}
+  {{- range .Values.admin.nginx.modules }}
+  load_module {{ . }};
+  {{- end }}
+
+  error_log /var/log/nginx/error.log warn;
+  pid /var/run/nginx.pid;
+
+  events {
+      worker_connections 1024;
+  }
+
+  http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+
+      log_format main '$remote_addr - $upstream_cache_status $remote_user [$time_local] '
+                      '"$request" $status $body_bytes_sent '
+                      '"$http_referer" "$http_user_agent" "$http_x_forwarded_for" '
+                      'rt=$request_time uct="$upstream_connect_time" uht="$upstream_header_time" urt="$upstream_response_time"';
+      access_log /var/log/nginx/access.log main;
+
+      real_ip_header {{ .Values.admin.nginx.realIpHeader }};
+      real_ip_recursive {{ .Values.admin.nginx.realIpRecursive }};
+      {{- range .Values.admin.nginx.proxySourceRanges }}
+      set_real_ip_from {{ . }};
+      {{- end }}
+
+      {{- if .Values.admin.nginx.vts.enabled }}
+      geoip_country       /etc/nginx/GeoIP.dat;
+      geoip_city          /etc/nginx/GeoLiteCity.dat;
+      geoip_proxy_recursive on;
+      {{- range .Values.admin.nginx.proxySourceRanges }}
+      geoip_proxy {{ . }};
+      {{- end }}
+
+      vhost_traffic_status_zone shared:vhost_traffic_status:{{ .Values.admin.nginx.vts.statusZoneSize }};
+      vhost_traffic_status_filter_by_set_key {{ .Values.admin.nginx.vts.defaultFilterKey }};
+      {{- end }}
+
+      sendfile on;
+      tcp_nopush on;
+      tcp_nodelay on;
+      keepalive_timeout 620s;
+      keepalive_requests 10000;
+      types_hash_max_size 2048;
+      server_tokens off;
+      proxy_connect_timeout 1800s;
+      proxy_send_timeout 1800s;
+      proxy_read_timeout 1800s;
+      uwsgi_connect_timeout 1800s;
+      uwsgi_send_timeout 1800s;
+      uwsgi_read_timeout 1800s;
+
+      gzip on;
+      gzip_disable "MSIE [1-6]\.(?!.*SV1)";
+      gzip_comp_level 2;
+      gzip_min_length 512;
+      gzip_proxied any;
+      gzip_vary on;
+      gzip_types text/plain text/css image/svg+xml application/javascript application/x-javascript text/xml application/xml text/javascript application/json application/xml+rss application/vnd.api+json;
+
+      brotli on;
+      brotli_types text/plain text/css image/svg+xml application/javascript application/x-javascript text/xml application/xml text/javascript application/json application/xml+rss application/vnd.api+json;
+
+      {{- if .Values.admin.nginx.vts.enabled }}
+      server {
+          listen {{ .Values.admin.nginx.vts.internalPort }};
+          server_name _;
+
+          location /healthz {
+              access_log off;
+              return 200;
+          }
+
+          location /nginx_status {
+              vhost_traffic_status_display;
+              vhost_traffic_status_display_format html;
+          }
+      }
+      {{- end }}
+
+      server {
+          listen {{ .Values.admin.service.internalPort }};
+          server_name _;
+
+          client_max_body_size 25M;
+          keepalive_timeout 620s;
+
+          root /static/code;
+
+          if ($http_x_forwarded_proto = "http") {
+              return 301 https://$host$request_uri;
+          }
+
+          location = /healthz {
+              access_log off;
+              return 200;
+          }
+
+          location = /robots.txt {
+              alias /usr/share/nginx/html/robots.txt;
+          }
+
+          location = /favicon.ico {
+              alias /static/code/website/static/favicon.ico;
+          }
+
+          location ~* ^/static/(.*) {
+              alias /static/code/admin/$1;
+          }
+
+          location ~* ^/admin/(.*) {
+              return 301 https://$host/;
+          }
+
+          include /etc/nginx/conf.d/*.conf;
+
+          location / {
+              # Disable caching of application requests
+              add_header Cache-Control "no-cache, no-store, max-age=0, must-revalidate";
+              add_header Expires "Mon, 01 Jan 1990 00:00:00 GMT";
+              add_header Pragma "no-cache";
+
+              # Mitigate HTTPoxy Vulnerability
+              # https://www.nginx.com/blog/mitigating-the-httpoxy-vulnerability-with-nginx/
+              proxy_set_header Proxy                  "";
+              proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+
+              # Pass requests to uwsgi application
+              include /etc/nginx/uwsgi_params;
+              # WARNING: Turning off uwsgi buffering will disable nginx caching.
+              # uwsgi_buffering off;
+              uwsgi_pass uwsgi://127.0.0.1:{{ .Values.admin.service.externalPort }};
+          }
+      }
+  }
+admin-uwsgi.ini: |-
+  [uwsgi]
+  uid = www-data
+  gid = www-data
+  log-x-forwarded-for = true
+
+  # add user-agent, http://uwsgi.unbit.narkive.com/jEtphIzE/default-log-format-explained#post5
+  log-format = [pid: %(pid)|app: ?|req: ?/?] %(addr) (%(user)) {%(vars) vars in %(pktsize) bytes} [%(ctime)] %(method) %(uri) => generated %(rsize) bytes in %(msecs) msecs (%(proto) %(status)) %(headers) headers in %(hsize) bytes (%(switches) switches on core %(core)) "%(uagent)"
+
+  # Flask-related settings
+  chdir = /code
+  module = admin.base.wsgi:application
+  env = OSF_PRODUCTION=1
+  env = DJANGO_SETTINGS_MODULE=admin.base.settings
+  env = DEBUG=
+
+  # process-related settings
+  master = true
+  workers = {{ .Values.admin.uwsgi.workerCount }}
+  threads = 1
+  harakiri = 120
+  buffer-size = 8192
+  stats = :1717
+  vacuum = true
+  need-app = true
+  show-config = true
+
+  # greenlet settings
+  gevent = 500
+  gevent-early-monkey-patch = true
+api-nginx.conf: |-
+  user nginx;
+  worker_processes 1;
+
+  load_module /usr/lib/nginx/modules/ngx_http_brotli_filter_module.so;
+  {{- if .Values.api.nginx.vts.enabled }}
+  load_module /usr/lib/nginx/modules/ngx_http_geoip_module.so;
+  load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+  {{- end }}
+  {{- range .Values.api.nginx.modules }}
+  load_module {{ . }};
+  {{- end }}
+
+  error_log /var/log/nginx/error.log warn;
+  pid /var/run/nginx.pid;
+
+  events {
+      worker_connections 1024;
+  }
+
+  http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+
+      log_format main '$remote_addr - $upstream_cache_status $remote_user [$time_local] '
+                      '"$request" $status $body_bytes_sent '
+                      '"$http_referer" "$http_user_agent" "$http_x_forwarded_for" '
+                      'rt=$request_time uct="$upstream_connect_time" uht="$upstream_header_time" urt="$upstream_response_time"';
+      access_log /var/log/nginx/access.log main;
+
+      real_ip_header {{ .Values.api.nginx.realIpHeader }};
+      real_ip_recursive {{ .Values.api.nginx.realIpRecursive }};
+      {{- range .Values.api.nginx.proxySourceRanges }}
+      set_real_ip_from {{ . }};
+      {{- end }}
+
+      {{- if .Values.api.nginx.vts.enabled }}
+      geoip_country       /etc/nginx/GeoIP.dat;
+      geoip_city          /etc/nginx/GeoLiteCity.dat;
+      geoip_proxy_recursive on;
+      {{- range .Values.api.nginx.proxySourceRanges }}
+      geoip_proxy {{ . }};
+      {{- end }}
+
+      vhost_traffic_status_zone shared:vhost_traffic_status:{{ .Values.api.nginx.vts.statusZoneSize }};
+      vhost_traffic_status_filter_by_set_key {{ .Values.api.nginx.vts.defaultFilterKey }};
+      {{- end }}
+
+      sendfile on;
+      tcp_nopush on;
+      tcp_nodelay on;
+      keepalive_timeout 620s;
+      keepalive_requests 10000;
+      types_hash_max_size 2048;
+      server_tokens off;
+      proxy_connect_timeout 1800s;
+      proxy_send_timeout 1800s;
+      proxy_read_timeout 1800s;
+      uwsgi_connect_timeout 1800s;
+      uwsgi_send_timeout 1800s;
+      uwsgi_read_timeout 1800s;
+
+      gzip on;
+      gzip_disable "MSIE [1-6]\.(?!.*SV1)";
+      gzip_comp_level 2;
+      gzip_min_length 512;
+      gzip_proxied any;
+      gzip_vary on;
+      gzip_types text/plain text/css image/svg+xml application/javascript application/x-javascript text/xml application/xml text/javascript application/json application/xml+rss application/vnd.api+json;
+
+      brotli on;
+      brotli_types text/plain text/css image/svg+xml application/javascript application/x-javascript text/xml application/xml text/javascript application/json application/xml+rss application/vnd.api+json;
+
+      {{- if .Values.api.nginx.vts.enabled }}
+      server {
+          listen {{ .Values.api.nginx.vts.internalPort }};
+          server_name _;
+
+          location /healthz {
+              access_log off;
+              return 200;
+          }
+
+          location /nginx_status {
+              vhost_traffic_status_display;
+              vhost_traffic_status_display_format html;
+          }
+      }
+      {{- end }}
+
+      server {
+          listen {{ .Values.api.service.internalPort }};
+          server_name _;
+
+          client_max_body_size 25M;
+          keepalive_timeout 620s;
+
+          root /static/code;
+
+          if ($http_x_forwarded_proto = "http") {
+              return 301 https://$host$request_uri;
+          }
+
+          location = /healthz {
+              access_log off;
+              return 200;
+          }
+
+          location = /robots.txt {
+              alias /usr/share/nginx/html/robots.txt;
+          }
+
+          location = /favicon.ico {
+              alias /static/code/website/static/favicon.ico;
+          }
+
+          location ~* ^/v2/static/(.*) {
+              alias /static/code/api/static/vendor/$1;
+          }
+
+          include /etc/nginx/conf.d/*.conf;
+
+          location / {
+              # Disable caching of application requests
+              add_header Cache-Control "no-cache, no-store, max-age=0, must-revalidate";
+              add_header Expires "Mon, 01 Jan 1990 00:00:00 GMT";
+              add_header Pragma "no-cache";
+
+              # Mitigate HTTPoxy Vulnerability
+              # https://www.nginx.com/blog/mitigating-the-httpoxy-vulnerability-with-nginx/
+              proxy_set_header Proxy                  "";
+              proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+
+              # Pass requests to uwsgi application
+              include /etc/nginx/uwsgi_params;
+              # WARNING: Turning off uwsgi buffering will disable nginx caching.
+              # uwsgi_buffering off;
+              uwsgi_pass uwsgi://127.0.0.1:{{ .Values.api.service.externalPort }};
+          }
+      }
+  }
+api-uwsgi.ini: |-
+  [uwsgi]
+  uid = www-data
+  gid = www-data
+  log-x-forwarded-for = true
+
+  # add user-agent, http://uwsgi.unbit.narkive.com/jEtphIzE/default-log-format-explained#post5
+  log-format = [pid: %(pid)|app: ?|req: ?/?] %(addr) (%(user)) {%(vars) vars in %(pktsize) bytes} [%(ctime)] %(method) %(uri) => generated %(rsize) bytes in %(msecs) msecs (%(proto) %(status)) %(headers) headers in %(hsize) bytes (%(switches) switches on core %(core)) "%(uagent)"
+
+  # Flask-related settings
+  chdir = /code
+  module = api.base.wsgi:application
+  env = OSF_PRODUCTION=1
+  env = DJANGO_SETTINGS_MODULE=api.base.settings
+  env = DEBUG=
+
+  # process-related settings
+  master = true
+  workers = {{ .Values.api.uwsgi.workerCount }}
+  threads = 1
+  harakiri = 120
+  buffer-size = 8192
+  stats = :1717
+  vacuum = true
+  need-app = true
+  show-config = true
+
+  # greenlet settings
+  gevent = 500
+  gevent-early-monkey-patch = true
+web-nginx-osf-preprints.conf: |-
+  {{- range $key, $val := .Values.web.nginx.preprintDomainRedirects }}
+  location ~* ^/preprints/{{ $key }}(?!/\w+/download/?$)(.*) {
+      return 301 https://{{ $val }}$1;
+  }
+  {{- end }}
+
+  location ~* ^/preprints/(?!(\w+/download|\w+/\w+/download)/?$).* {
+      {{- if .Values.prerender.enabled }}
+      include /etc/nginx/prerender.conf;
+      {{- end }}
+
+      {{- range .Values.web.nginx.preprintRewrites }}
+      {{ . }}
+      {{- end }}
+
+      rewrite ^/preprints/(.*)$ /$1 break;
+      proxy_redirect off;
+      proxy_buffering off;
+      proxy_pass http://{{ $osfPreprints.service.name }}:{{ $osfPreprints.service.externalPort }};
+  }
+web-nginx-osf-reviews.conf: |-
+  location ~* ^/reviews(/?$|/.*) {
+      {{- if .Values.prerender.enabled }}
+      include /etc/nginx/prerender.conf;
+      {{- end }}
+
+      rewrite ^/reviews/(.*)$ /$1 break;
+      proxy_redirect off;
+      proxy_buffering off;
+      proxy_pass http://{{ $osfReviews.service.name }}:{{ $osfReviews.service.externalPort }};
+  }
+web-nginx-osf-web.conf: |-
+  location ~* ^/ember_osf_web(/?$|/.*) {
+      {{- if .Values.prerender.enabled }}
+      include /etc/nginx/prerender.conf;
+      {{- end }}
+
+      rewrite ^/ember_osf_web/(.*)$ /$1 break;
+      proxy_redirect off;
+      proxy_buffering off;
+      proxy_pass http://{{ $osfWeb.service.name }}:{{ $osfWeb.service.externalPort }};
+  }
+web-nginx-prerender.conf: |-
+  set $prerender 0;
+
+  if ($http_user_agent ~* "baiduspider|twitterbot|facebookexternalhit|rogerbot|linkedinbot|embedly|quora link preview|showyoubot|outbrain|pinterest|slackbot|vkShare|W3C_Validator|googlebot") {
+      set $prerender 1;
+  }
+
+  # Google translate
+  if ($http_referer ~* "translate\.googleusercontent\.com") {
+      set $prerender 1;
+  }
+
+  if ($args ~* "_escaped_fragment_") {
+      set $prerender 1;
+  }
+
+  if ($http_user_agent ~* "prerender") {
+      set $prerender 0;
+  }
+
+  if ($uri ~* "\.(js|css|xml|less|png|jpg|jpeg|gif|pdf|doc|txt|ico|rss|zip|mp3|rar|exe|wmv|doc|avi|ppt|mpg|mpeg|tif|wav|mov|psd|ai|xls|mp4|m4a|swf|dat|dmg|iso|flv|m4v|torrent|ttf|woff)") {
+      set $prerender 0;
+  }
+
+  # Exclude download links from prerender
+  if ($arg_action ~* "download") {
+      set $prerender 0;
+  }
+
+  if ($uri ~* ^/\w+/download(/?$|/.*)) {
+      set $prerender 0;
+  }
+
+  if ($uri ~* ^/preprints/(\w+/download|\w+/\w+/download)(/?$|/.*)) {
+      set $prerender 0;
+  }
+
+  if ($prerender = 1) {
+      rewrite .* /https://$host$request_uri? break;
+      proxy_pass http://{{ .Values.prerender.service.name }}:{{ .Values.prerender.service.externalPort }};
+  }
+web-nginx-redis.conf: |-
+  # Must use redis module vs redis2 because of bug in response body
+  # https://github.com/openresty/srcache-nginx-module/issues/41
+  location = /redis_get {
+      internal;
+
+      set_unescape_uri $redis_key $arg_key;
+      set_md5 $redis_key;
+
+      redis_pass {{ template "osf.redis.fullname" . }}:{{ .Values.redis.service.port }};
+  }
+
+  location = /redis2_set {
+      internal;
+
+      set_unescape_uri $exptime $arg_exptime;
+      set_unescape_uri $key $arg_key;
+      set_md5 $key;
+
+      redis2_query set $key $echo_request_body;
+      redis2_query expire $key $exptime;
+      redis2_pass {{ template "osf.redis.fullname" . }}:{{ .Values.redis.service.port }};
+  }
+web-nginx-redis-cache.conf: |-
+  # NOTE: $not_cacheable is set via map in order to be available at the correct phase for srcache skip
+  # https://github.com/openresty/srcache-nginx-module#caveats
+
+  # Caching configuration
+  set $key "$host$uri$args_first$args_rest";
+  set_escape_uri $escaped_key $key;
+  # Default cache methods, specified for clarity.
+  srcache_methods GET HEAD;
+    # Skip cache when:
+  # - logged in
+  # - using basic auth
+  # - view-only link
+  # - hmac signed
+  # - waterbutler provider
+  # - monitoring agent
+
+  srcache_fetch_skip $not_cacheable;
+  srcache_store_skip $not_cacheable;
+
+  srcache_fetch GET /redis_get key=$escaped_key;
+  srcache_store PUT /redis2_set key=$escaped_key&exptime=$exp_time;
+
+  # Custom Cache Header
+  add_header X-Cache-Status $srcache_fetch_status;
+web-nginx-uwsgi-cache.conf: |-
+  set $agent_monitor 0;
+  if ($http_user_agent ~* "(haproxy monitoring|rackspace monitoring|varnish|runscope-radar)") {
+      set $agent_monitor 1;
+  }
+
+  # Custom Cache Header
+  add_header X-Cache-Status $upstream_cache_status;
+
+  # Caching configuration
+  uwsgi_cache osf_uwsgi_cache;
+  uwsgi_cache_key $host$uri$args_first$args_rest;
+  # Default cache methods, specified for clarity.
+  uwsgi_cache_methods GET HEAD;
+  # Skip cache when:
+  # - logged in
+  # - using basic auth
+  # - view-only link
+  # - hmac signed
+  # - waterbutler provider
+  # - monitoring agent
+  uwsgi_cache_bypass $cookie_{{ .Values.web.nginx.cache.cookieName }} $http_authorization $arg_view_only $arg_signature $arg_provider $arg_render $agent_monitor;
+  uwsgi_no_cache $cookie_{{ .Values.web.nginx.cache.cookieName }} $http_authorization $arg_view_only $arg_signature $arg_provider $arg_render $agent_monitor;
+  uwsgi_cache_lock on;
+  uwsgi_cache_lock_timeout 30s;
+  uwsgi_cache_use_stale updating;
+web-nginx.conf: |-
+  user nginx;
+  worker_processes 1;
+
+  load_module /usr/lib/nginx/modules/ngx_http_brotli_filter_module.so;
+  {{- if .Values.web.nginx.vts.enabled }}
+  load_module /usr/lib/nginx/modules/ngx_http_geoip_module.so;
+  load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+  {{- end }}
+  {{- if and .Values.web.nginx.cache.enabled .Values.redis.enabled }}
+  load_module /usr/lib/nginx/modules/ndk_http_module.so;
+  load_module /usr/lib/nginx/modules/ngx_http_echo_module.so;
+  load_module /usr/lib/nginx/modules/ngx_http_redis_module.so;
+  load_module /usr/lib/nginx/modules/ngx_http_redis2_module.so;
+  load_module /usr/lib/nginx/modules/ngx_http_set_misc_module.so;
+  load_module /usr/lib/nginx/modules/ngx_http_srcache_filter_module.so;
+  {{- end }}
+  {{- range .Values.web.nginx.modules }}
+  load_module {{ . }};
+  {{- end }}
+
+  error_log /var/log/nginx/error.log warn;
+  pid /var/run/nginx.pid;
+
+  events {
+      worker_connections 1024;
+  }
+
+  http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+
+      log_format main '$remote_addr - {{ if and .Values.web.nginx.cache.enabled .Values.redis.enabled }}$srcache_fetch_status{{ else }}$upstream_cache_status{{ end }} $remote_user [$time_local] '
+                      '"$request" $status $body_bytes_sent '
+                      '"$http_referer" "$http_user_agent" "$http_x_forwarded_for" '
+                      'rt=$request_time uct="$upstream_connect_time" uht="$upstream_header_time" urt="$upstream_response_time"';
+      access_log /var/log/nginx/access.log main;
+
+      real_ip_header {{ .Values.web.nginx.realIpHeader }};
+      real_ip_recursive {{ .Values.web.nginx.realIpRecursive }};
+      {{- range .Values.web.nginx.proxySourceRanges }}
+      set_real_ip_from {{ . }};
+      {{- end }}
+
+      {{- if .Values.web.nginx.vts.enabled }}
+      geoip_country       /etc/nginx/GeoIP.dat;
+      geoip_city          /etc/nginx/GeoLiteCity.dat;
+      geoip_proxy_recursive on;
+      {{- range .Values.web.nginx.proxySourceRanges }}
+      geoip_proxy {{ . }};
+      {{- end }}
+
+      vhost_traffic_status_zone shared:vhost_traffic_status:{{ .Values.web.nginx.vts.statusZoneSize }};
+      vhost_traffic_status_filter_by_set_key {{ .Values.web.nginx.vts.defaultFilterKey }};
+      {{- end }}
+
+      sendfile on;
+      tcp_nopush on;
+      tcp_nodelay on;
+      keepalive_timeout 620s;
+      types_hash_max_size 2048;
+      server_tokens off;
+      proxy_connect_timeout 1800s;
+      proxy_send_timeout 1800s;
+      proxy_read_timeout 1800s;
+      uwsgi_connect_timeout 1800s;
+      uwsgi_send_timeout 1800s;
+      uwsgi_read_timeout 1800s;
+
+      gzip on;
+      gzip_disable "MSIE [1-6]\.(?!.*SV1)";
+      gzip_comp_level 2;
+      gzip_min_length 512;
+      gzip_proxied any;
+      gzip_vary on;
+      gzip_types text/plain text/css image/svg+xml application/javascript application/x-javascript text/xml application/xml text/javascript application/json application/xml+rss application/vnd.api+json;
+
+      brotli on;
+      brotli_types text/plain text/css image/svg+xml application/javascript application/x-javascript text/xml application/xml text/javascript application/json application/xml+rss application/vnd.api+json;
+
+      {{- if .Values.web.nginx.vts.enabled }}
+      server {
+          listen {{ .Values.web.nginx.vts.internalPort }};
+          server_name _;
+
+          location /healthz {
+              access_log off;
+              return 200;
+          }
+
+          location /nginx_status {
+              vhost_traffic_status_display;
+              vhost_traffic_status_display_format html;
+          }
+      }
+      {{- end }}
+
+      {{- if .Values.web.nginx.cache.enabled }}
+      ##
+      # Caching Settings
+      ##
+
+      # Pull cache-busting key out of query string
+      map $args $args_first {
+          default $args;
+          ~^(?<first>.*?)&?_=\d+ $first;
+      }
+      map $args $args_rest {
+          default "";
+          ~^\?_=\d+&?(?<rest>.*)$ $rest;
+          ~_=\d+(?<rest>.*)$ $rest;
+      }
+
+      map "$http_user_agent" $agent_not_cacheable {
+          default "";
+          "~*(haproxy monitoring|rackspace monitoring|varnish|prerender)" "1";
+      }
+      map "$cookie_{{ .Values.web.nginx.cache.cookieName }}$http_authorization$arg_view_only$arg_signature$arg_provider$arg_render$agent_not_cacheable" $not_cacheable {
+          default 1;
+          "" 0;
+      }
+
+      {{- if not .Values.redis.enabled }}
+      uwsgi_cache_path /cache/uwsgi keys_zone=osf_uwsgi_cache:10m inactive=120m;
+      uwsgi_temp_path /cache/uwsgi-temp;
+      {{- end }}
+      {{- end }}
+
+      {{- if .Values.web.nginx.preprintDomains }}
+      server {
+          listen {{ .Values.web.service.internalPort }};
+          server_name {{ join " " .Values.web.nginx.preprintDomains }};
+
+          if ($http_x_forwarded_proto = "http") {
+              return 301 https://$host$request_uri;
+          }
+
+          location = /favicon.ico {
+              alias /static/code/website/static/favicon.ico;
+          }
+
+          location = /robots.txt {
+              alias /usr/share/nginx/html/robots.txt;
+          }
+
+          location ~* ^/(?!\w+/download/?$).* {
+              {{- if .Values.prerender.enabled }}
+              include /etc/nginx/prerender.conf;
+              {{- end }}
+
+              # Mitigate HTTPoxy Vulnerability
+              # https://www.nginx.com/blog/mitigating-the-httpoxy-vulnerability-with-nginx/
+              proxy_set_header Proxy                  "";
+              proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+
+              proxy_redirect off;
+              proxy_buffering off;
+              proxy_pass http://{{ $osfPreprints.service.name }}:{{ $osfPreprints.service.externalPort }};
+          }
+
+          location / {
+              # Google Scholar wants 302 instead of 301
+              return 302 https://{{ .Values.web.nginx.primaryDomain }}$request_uri;
+          }
+      }
+      {{- end }}
+
+      {{- if .Values.web.nginx.institutionDomains }}
+      server {
+          listen {{ .Values.web.service.internalPort }};
+          server_name {{ join " " .Values.web.nginx.institutionDomains }};
+
+          client_max_body_size 25M;
+          keepalive_timeout 620s;
+
+          root /static/code;
+
+          if ($http_x_forwarded_proto = "http") {
+              return 301 https://$host$request_uri;
+          }
+
+          location = /favicon.ico {
+              alias /static/code/website/static/favicon.ico;
+          }
+
+          location = /robots.txt {
+              alias /usr/share/nginx/html/robots.txt;
+          }
+
+          location ~* ^/static/addons/(.*?)/(.*) {
+              alias /static/code/addons/$1/static/$2;
+          }
+
+          location ~* ^/static/(.*) {
+              alias /static/code/website/static/$1;
+          }
+
+          location = / {
+              {{- if .Values.prerender.enabled }}
+              include /etc/nginx/prerender.conf;
+              {{- end }}
+
+              {{- if .Values.web.nginx.cache.enabled }}
+              {{- if .Values.redis.enabled }}
+              set $exp_time 60; # Redis time in seconds
+              include /etc/nginx/redis-cache.conf;
+              {{- else }}
+              uwsgi_cache_valid 200 1m;
+              include /etc/nginx/uwsgi-cache.conf;
+              {{- end }}
+              {{- end }}
+
+              # Disable caching of application requests
+              add_header Cache-Control "no-cache, no-store, max-age=0, must-revalidate";
+              add_header Expires "Mon, 01 Jan 1990 00:00:00 GMT";
+              add_header Pragma "no-cache";
+
+              # Mitigate HTTPoxy Vulnerability
+              # https://www.nginx.com/blog/mitigating-the-httpoxy-vulnerability-with-nginx/
+              proxy_set_header Proxy                  "";
+              proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+
+              # Pass requests to uwsgi application
+              include /etc/nginx/uwsgi_params;
+              # WARNING: Turning off uwsgi buffering will disable nginx caching.
+              # uwsgi_buffering off;
+              uwsgi_pass uwsgi://127.0.0.1:{{ .Values.web.service.externalPort }};
+          }
+
+          location / {
+              return 301 https://{{ .Values.web.nginx.primaryDomain }}$request_uri;
+          }
+      }
+      {{- end }}
+
+      server {
+          listen {{ .Values.web.service.internalPort }} default_server;
+          server_name _;
+
+          client_max_body_size 25M;
+          keepalive_timeout 620s;
+
+          root /static/code;
+
+          if ($http_x_forwarded_proto = "http") {
+              return 301 https://$host$request_uri;
+          }
+
+          location = /healthz {
+              access_log off;
+              return 200;
+          }
+
+          location = /robots.txt {
+              alias /usr/share/nginx/html/robots.txt;
+          }
+
+          location = /favicon.ico {
+              alias /static/code/website/static/favicon.ico;
+          }
+
+          location = /js/embedded-wayf_config.js {
+              alias /var/www/html/js/embedded-wayf_config.js;
+          }
+
+          location = /js/embedded-wayf_disp.js {
+              alias /var/www/html/js/embedded-wayf_disp.js;
+          }
+
+          location ~* ^/static/addons/(.*?)/(.*) {
+              alias /static/code/addons/$1/static/$2;
+          }
+
+          location ~* ^/static/(.*) {
+              alias /static/code/website/static/$1;
+          }
+
+          {{- if (index .Values.web.nginx "additionalConfig") }}
+          {{- .Values.web.nginx.additionalConfig | nindent 10 }}
+          {{- end }}
+
+          include /etc/nginx/conf.d/*.conf;
+
+          location ~* ^/share(/?$|/.*) {
+              return 301 {{ .Values.share.url }};
+          }
+
+          {{- if and .Values.web.nginx.cache.enabled .Values.web.nginx.cache.guids }}
+          location ~* (^/|^/api/v1/project/)({{ join "|" .Values.web.nginx.cache.guids }}) {
+              {{- if .Values.prerender.enabled }}
+              include /etc/nginx/prerender.conf;
+              {{- end }}
+
+              {{- if .Values.web.nginx.cache.enabled }}
+              {{- if .Values.redis.enabled }}
+              set $exp_time 3600; # Redis time in seconds
+              include /etc/nginx/redis-cache.conf;
+              {{- else }}
+              uwsgi_cache_valid 200 60m;
+              include /etc/nginx/uwsgi-cache.conf;
+              {{- end }}
+              {{- end }}
+
+              # Disable caching of application requests
+              add_header Cache-Control "no-cache, no-store, max-age=0, must-revalidate";
+              add_header Expires "Mon, 01 Jan 1990 00:00:00 GMT";
+              add_header Pragma "no-cache";
+
+              # Mitigate HTTPoxy Vulnerability
+              # https://www.nginx.com/blog/mitigating-the-httpoxy-vulnerability-with-nginx/
+              proxy_set_header Proxy                  "";
+              proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+
+              # Pass requests to uwsgi application
+              include /etc/nginx/uwsgi_params;
+              # WARNING: Turning off uwsgi buffering will disable nginx caching.
+              # uwsgi_buffering off;
+              uwsgi_pass uwsgi://127.0.0.1:{{ .Values.web.service.externalPort }};
+          }
+          {{- end }}
+
+          location / {
+              {{- if .Values.prerender.enabled }}
+              include /etc/nginx/prerender.conf;
+              {{- end }}
+
+              {{- if .Values.web.nginx.cache.enabled }}
+              {{- if .Values.redis.enabled }}
+              set $exp_time 60; # Redis time in seconds
+              include /etc/nginx/redis-cache.conf;
+              {{- else }}
+              uwsgi_cache_valid 200 1m;
+              include /etc/nginx/uwsgi-cache.conf;
+              {{- end }}
+              {{- end }}
+
+              # Disable caching of application requests
+              add_header Cache-Control "no-cache, no-store, max-age=0, must-revalidate";
+              add_header Expires "Mon, 01 Jan 1990 00:00:00 GMT";
+              add_header Pragma "no-cache";
+
+              # Mitigate HTTPoxy Vulnerability
+              # https://www.nginx.com/blog/mitigating-the-httpoxy-vulnerability-with-nginx/
+              proxy_set_header Proxy                  "";
+              proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+
+              # Pass requests to uwsgi application
+              include /etc/nginx/uwsgi_params;
+              
+              # Timeout for waiting on the response body
+              uwsgi_read_timeout {{ .Values.web.nginx.readTimeout }}s;
+
+              # WARNING: Turning off uwsgi buffering will disable nginx caching.
+              # uwsgi_buffering off;
+              uwsgi_pass uwsgi://127.0.0.1:{{ .Values.web.service.externalPort }};
+
+              # URL rewrites
+              rewrite "^/project/.*?/node/(.*)" https://$host/$1 permanent;
+              rewrite "^/project/([a-zA-Z0-9]{5,}.*)" https://$host/$1 permanent;
+              rewrite "^/profile/([a-zA-Z0-9]{5,})" https://$host/$1 permanent;
+              {{- range .Values.web.nginx.additionalRewrites }}
+              {{ . }}
+              {{- end }}
+          }
+      }
+
+      {{- if .Values.web.nginx.redirects.enabled }}
+      # WARNING: Must remain at the bottom to ensure connections default to
+      # the first server configuration for institutions
+      {{- range $value := .Values.web.nginx.redirects.domains }}
+      server {
+          listen {{ $.Values.web.service.internalPort }};
+          server_name {{ $value.from | join " " }};
+          return 301 https://{{ $value.to }}$request_uri;
+      }
+      {{- end }}
+      {{- end }}
+  }
+web-uwsgi.ini: |-
+  [uwsgi]
+  uid = www-data
+  gid = www-data
+  log-x-forwarded-for = true
+
+  # add user-agent, http://uwsgi.unbit.narkive.com/jEtphIzE/default-log-format-explained#post5
+  log-format = [pid: %(pid)|app: ?|req: ?/?] %(addr) (%(user)) {%(vars) vars in %(pktsize) bytes} [%(ctime)] %(method) %(uri) => generated %(rsize) bytes in %(msecs) msecs (%(proto) %(status)) %(headers) headers in %(hsize) bytes (%(switches) switches on core %(core)) "%(uagent)"
+
+  # Flask-related settings
+  chdir = /code
+  module = main:app
+  env = OSF_PRODUCTION=1
+  env = DJANGO_SETTINGS_MODULE=api.base.settings
+  env = DEBUG=
+
+  # process-related settings
+  master = true
+  workers = {{ .Values.web.uwsgi.workerCount }}
+  threads = 1
+  harakiri = 120
+  buffer-size = 8192
+  stats = :1717
+  vacuum = true
+  need-app = true
+  show-config = true
+
+  # greenlet settings
+  gevent = 500
+  gevent-early-monkey-patch = true
+embedded-wayf_config.js: |-
+  // To use this JavaScript, please access:
+  // https://ds.gakunin.nii.ac.jp/WAYF/embedded-wayf.js/snippet.html
+  // and copy/paste the resulting HTML snippet to an unprotected web page that 
+  // you want the embedded WAYF to be displayed
+  
+  
+  //////////////////// ESSENTIAL SETTINGS ////////////////////
+  
+  // URL of the WAYF to use
+  // Examples: "https://wayf.switch.ch/SWITCHaai/WAYF", "https://wayf-test.switch.ch/aaitest/WAYF";
+  // [Mandatory]
+  var wayf_URL = "{{ .Values.web.shibboleth.ds_url }}";
+  
+  // EntityID of the Service Provider that protects this Resource
+  // Examples: "https://econf.switch.ch/shibboleth", "https://dokeos.unige.ch/shibboleth"
+  // [Mandatory]
+  var wayf_sp_entityID = "{{ .Values.configEnvs.OSF_CAS_URL }}/shibboleth-sp";
+  
+  // Shibboleth Service Provider handler URL
+  // Examples: "https://point.switch.ch/Shibboleth.sso", "https://rr.aai.switch.ch/aaitest/Shibboleth.sso"
+  // [Mandatory, if wayf_use_discovery_service = false]
+  //wayf_use_discovery_service = true;
+  var wayf_sp_handlerURL = "{{ .Values.configEnvs.OSF_CAS_URL }}/Shibboleth.sso";
+  
+  // URL on this resource that the user shall be returned to after authentication
+  // Examples: "https://econf.switch.ch/aai/home", "https://olat.uzh.ch/my/courses"
+  // [Mandatory]
+  var wayf_return_url = "{{ .Values.configEnvs.OSF_CAS_URL }}/login?service={{ .Values.configEnvs.OSF_SERVICE_URL }}/";
+  
+  
+  //////////////////// RECOMMENDED SETTINGS ////////////////////
+  
+  // Width of the embedded WAYF in pixels or "auto"
+  // This is the width of the content only (without padding and border). 
+  // Add 2 x (10px + 1px) = 22px for padding and border to get the actual 
+  // width of everything that is drawn.
+  // [Optional, default: "auto"]
+  var wayf_width = 430;
+  
+  // Height of the embedded WAYF in pixels or "auto"
+  // This is the height of the content only (without padding and border). 
+  // Add 2 x (10px + 1px) = 22px for padding and border to get the actual 
+  // height of everything that is drawn.
+  // [Optional, default: "auto"]
+  var wayf_height = "auto";
+  
+  // Whether to show the checkbox to remember settings for this session
+  // [Optional, default: true]
+  var wayf_show_remember_checkbox = false;
+  
+  // Force the user's Home Organisation selection to be remembered for the
+  // current browser session. If wayf_show_remember_checkbox is true
+  // the checkbox will be shown but will be read only.
+  // WARNING: Only use this feature if you know exactly what you are doing
+  //          This option will cause problems that are difficult to find 
+  //          in case they accidentially select a wrong Home Organisation
+  // [Optional, false]
+  var wayf_force_remember_for_session = false;
+  
+  // Logo size
+  // Choose whether the small or large logo shall be used
+  // [Optional, default: true]
+  var wayf_use_small_logo = true;
+  var wayf_hide_logo = true;
+  var wayf_show_categories = false;
+  var wayf_overwrite_intro_text="";
+  
+  // Font size
+  // [Optional, default: 12]
+  var wayf_font_size = 11;
+  
+  // Font color
+  // [Optional, default: #000000]
+  var wayf_font_color = '#000000';
+  
+  // Border color
+  // [Optional, default: #00247D]
+  var wayf_border_color = '#00247D';
+  
+  // Background color
+  // [Optional, default: #F4F7F7]
+  var wayf_background_color = '#F4F7F7';
+  
+  // Whether to automatically log in user if he has a session/permanent redirect
+  // cookie set at central wayf
+  // [Optional, default: true]
+  var wayf_auto_login = false;
+  
+  // Whether to hide the WAYF after the user was logged in
+  // This requires that the _shib_session_* cookie is set when a user 
+  // could be authenticated, which is the default case when Shibboleth is used.
+  // For other Service Provider implementations have a look at the setting
+  // wayf_check_login_state_function that allows you to customize this
+  // [Optional, default: false]
+  var wayf_hide_after_login = false;
+  
+  // Whether or not to show the categories in the drop-down list
+  // Possible values are: true or false
+  // [Optional, default: true]
+  var wayf_show_categories =  false;
+  
+  // Most used Identity Providers will be shown as top category in the drop down
+  // list if this feature is used.
+  // [Optional, commented out by default]
+  // var wayf_most_used_idps =  new Array("https://aai-logon.unibas.ch/idp/shibboleth", "https://aai.unil.ch/idp/shibboleth");
+  
+  // Categories of Identity Provider that shall not be shown
+  // Possible values are: "hokkaido","tohoku","kanto","chubu","kinki","chugoku","shikoku","kyushu","others", "all"
+  // Example of how to hide categories
+  // var wayf_hide_categories =  new Array("other", "library");
+  // [Optional, commented out by default]
+  // var wayf_hide_categories =  new Array();
+  var wayf_hide_categories =  new Array("all");
+  
+  // EntityIDs of Identity Provider whose category is hidden but that shall be shown anyway
+  // If this array is not empty, wayf_show_categories will be disabled because
+  // otherwise, unhidden IdPs may be displayed in the wrong category
+  // Example of how to unhide certain Identity Providers
+  // var wayf_unhide_idps = new Array("https://aai-login.uzh.ch/idp/shibboleth");
+  // [Optional, commented out by default]
+  // var wayf_unhide_idps = new Array();
+  var wayf_unhide_idps = new Array("https://openidp.nii.ac.jp/idp/shibboleth", "https://idp.rdm.nii.ac.jp/idp/shibboleth");
+  
+  // EntityIDs of Identity Provider that shall not be shown at all
+  // Example of how to hide certain Identity Provider
+  // var wayf_hide_idps = new Array("https://idp.unige.ch/idp/shibboleth", "https://lewotolo.switch.ch/idp/shibboleth");
+  // [Optional, commented out by default]
+  // var wayf_hide_idps = new Array();
+  
+  //////////////////// ADVANCED SETTINGS ////////////////////
+  
+  // Use the SAML2/Shibboleth 2 Discovery Service protocol where
+  // the user is sent back to the Service Provider after selection
+  // of his Home Organisation.
+  // This is true by default and it should only be uncommented and set to false
+  // if there is a good reason why to use the old and deprecated Shibboleth WAYF
+  // protocol instead.
+  // [Optional, default: commented out]
+  // var wayf_use_discovery_service = false;
+  
+  // Session Initiator URL of the Service Provider
+  // Examples: "https://econf.switch.ch/Shibboleth.sso/DS", "https://dokeos.unige.ch/Shibboleth.sso/DS"
+  // This will implicitely be set to wayf_sp_samlDSURL = wayf_sp_handlerURL + "/DS";
+  // [Optional, if wayf_use_discovery_service = true 
+  //  or if wayf_additional_idps is not empty, default: commented out]
+  // var wayf_sp_samlDSURL = wayf_sp_handlerURL + "/Login";
+  
+  // Default IdP to preselect when central WAYF couldn't guess IdP either
+  // This is usually the case the first time ever a user accesses a resource
+  // [Optional, default: commented out]
+  // var wayf_default_idp = "https://aai.switch.ch/idp/shibboleth";
+  
+  // Set a custom Assertion Consumer URL instead of
+  // the default wayf_sp_handlerURL + '/SAML/POST'
+  // Only relevant if wayf_use_discovery_service is false
+  // Examples: "https://olat.uzh.ch/shib/samlaa", 
+  // This will implicitely be set to wayf_sp_samlACURL = wayf_sp_handlerURL + "/SAML/POST";
+  // "https://foodle.feide.no/simplesaml/shib13/sp/AssertionConsumerService.php"
+  // [Optional, commented out by default]
+  // var wayf_sp_samlACURL = "https://maclh.switch.ch/foo/bar";
+  
+  // Overwites the text of the checkbox if
+  // wayf_show_remember_checkbox is set to true
+  // [Optional, commented out by default]
+  // var wayf_overwrite_checkbox_label_text = 'Save setting for today';
+  
+  // Overwrites the text of the submit button
+  // [Optional, commented out by default]
+  // var wayf_overwrite_submit_button_text = 'Go';
+  
+  // Overwrites the intro text above the drop-down list
+  // [Optional, commented out by default]
+  // var wayf_overwrite_intro_text = 'Select your Home Organisation to log in';
+  
+  // Overwrites the category name of the most used IdP category in the drop-down list
+  // [Optional, commented out by default]
+  // var wayf_overwrite_most_used_idps_text = 'Most popular';
+  
+  
+  // Whether to hide the WAYF after the user was logged in
+  // This requires that the _shib_session_* cookie is set when a user 
+  // could be authenticated
+  // If you want to hide the embedded WAYF completely, uncomment
+  // the property and set it to "". This then won't draw anything
+  // [Optional, default commented out: You are already logged in]
+  // var wayf_logged_in_messsage = "";
+  
+  // Provide the name of a JavaScript function that checks whether the user
+  // already is logged in. The function should return true if the user is logged
+  // in or false otherwise. If the user is logged in, the Embedded WAYF will
+  // hide itself or draw a custom message depending on the 
+  // setting wayf_logged_in_messsage
+  // The function you specify has of course to be implemented by yourself!
+  // [Optional, commented out by default]
+  // var wayf_check_login_state_function = function() { 
+  // if (# specify user-is-logged-in condition#)
+  //   return true;
+  // else 
+  //   return false;
+  // }
+  
+  // EntityIDs, Names and SSO URLs of Identity Providers from other federations 
+  // that shall be added to the drop-down list
+  // The IdPs will be displayed in the sequence they are defined
+  // [Optional, commented out by default]
+  // var wayf_additional_idps = [ ];
+  // Example of how to add Identity Provider from other federations
+  // var wayf_additional_idps = [ 
+  //        
+  //        {name:"International University X",
+  //        entityID:"urn:mace:switch.ch:SWITCHaai:example.university.org",
+  //        SAML1SSOurl:"https://int.univ.org/shibboleth-idp/SSO"},
+  //
+  //        {name:"Some Other University",
+  //        entityID:"https://other.univ.edu/idp/shibboleth",
+  //        SAML1SSOurl:"https://other.univ.edu/shibboleth-idp/SSO"},
+  // ];
+  
+  var wayf_additional_idps = [
+        {name:"OpenIdP",
+        entityID:"https://openidp.nii.ac.jp/idp/shibboleth",
+        SAML1SSOurl:"https://openidp.nii.ac.jp/idp/profile/Shibboleth/SSO"},
+  ];
+  
+  
+  // The list which is the target of incremental search is extracted to IdP acquired by DiscpFeed
+  // URL of DiscpFeed is set up
+  // var wayf_discofeed_url = "https://point.switch.ch/Shibboleth.sso/DiscoFeed";
+  // [Optional, commented out by default]
+  // var wayf_discofeed_url = "";
+  
+  // The path of Cookie created by SP is set. As for default configuration, 
+  // the path of an access place is set.
+  // var wayf_sp_cookie_path = "/";
+  // [Optional, commented out by default]
+  // var wayf_sp_cookie_path = "";
+  var wayf_sp_cookie_path = "/";
+  
+  // Height of the embedded WAYF IdP List in pixels
+  // [Optional, default: 150]
+  var wayf_list_height = 350;
+  
+  
+  //////////////////// ADDITIONAL CSS CUSTOMIZATIONS ////////////////////
+  
+  // To further customize the appearance of the Embedded WAYF you could
+  // define CSS rules for the following CSS IDs that are used within the 
+  // Embedded WAYF:
+  // #wayf_div                     - Container for complete Embedded WAYF
+  // #wayf_logo_div                - Container for logo
+  // #wayf_logo                    - Image for logo
+  // #wayf_intro_div               - Container of drop-down list intro label
+  // #wayf_intro_label             - Label of intro text
+  // #IdPList                      - The form element
+  // #user_idp                     - Select element for drop-down list
+  // #wayf_remember_checkbox_div   - Container of checkbox and its label
+  // #wayf_remember_checkbox       - Checkbox for remembering settings for session
+  // #wayf_remember_checkbox_label - Text of checkbox
+  // #wayf_submit_button           - Submit button
+  //
+  // Use these CSS IDs carefully and at own risk because future updates could
+  // interfere with the rules you created and the IDs may change without notice!
+  
+  
+  //-->
+{{- end -}}
+{{- define "osf.admin.inlineconfigs" }}
+shibboleth/shibboleth2.xml: |-
+  <SPConfig xmlns="urn:mace:shibboleth:2.0:native:sp:config"
+      xmlns:conf="urn:mace:shibboleth:2.0:native:sp:config"
+      xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
+      xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
+      xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+      clockSkew="180">
+
+      <InProcess logger="native.logger" checkSpoofing="true"/>
+
+      <!--
+      By default, in-memory StorageService, ReplayCache, ArtifactMap, and SessionCache
+      are used. See example-shibboleth2.xml for samples of explicitly configuring them.
+      -->
+
+      <!--
+      To customize behavior for specific resources on Apache, and to link vhosts or
+      resources to ApplicationOverride settings below, use web server options/commands.
+      See https://wiki.shibboleth.net/confluence/display/SHIB2/NativeSPConfigurationElements for help.
+
+      For examples with the RequestMap XML syntax instead, see the example-shibboleth2.xml
+      file, and the https://wiki.shibboleth.net/confluence/display/SHIB2/NativeSPRequestMapHowTo topic.
+      -->
+
+      <!-- The ApplicationDefaults element is where most of Shibboleth's SAML bits are defined. -->
+      <ApplicationDefaults entityID="https://{{ .Values.configEnvs.OSF_ADMIN_NAME }}/shibboleth-sp"
+                            REMOTE_USER="eppn persistent-id targeted-id" attributePrefix="AUTH-">
+
+          <!--
+          Controls session lifetimes, address checks, cookie handling, and the protocol handlers.
+          You MUST supply an effectively unique handlerURL value for each of your applications.
+          The value defaults to /Shibboleth.sso, and should be a relative path, with the SP computing
+          a relative value based on the virtual host. Using handlerSSL="true", the default, will force
+          the protocol to be https. You should also set cookieProps to "https" for SSL-only sites.
+          Note that while we default checkAddress to "false", this has a negative impact on the
+          security of your site. Stealing sessions via cookie theft is much easier with this disabled.
+          -->
+          <Sessions lifetime="28800" timeout="3600" relayState="ss:mem"
+                    checkAddress="false" handlerSSL="false" cookieProps="http">
+
+              <!--
+              Configures SSO for a default IdP. To allow for >1 IdP, remove
+              entityID property and adjust discoveryURL to point to discovery service.
+              (Set discoveryProtocol to "WAYF" for legacy Shibboleth WAYF support.)
+              You can also override entityID on /Login query string, or in RequestMap/htaccess.
+              -->
+              <!-- <SSO entityID="https://idp.testshib.org/idp/shibboleth"
+                    discoveryProtocol="SAMLDS" discoveryURL="https://ds.example.org/DS/WAYF">
+                SAML2 SAML1
+              </SSO> -->
+              <!-- <SSO entityID="https://idp.testshib.org/idp/shibboleth">SAML2 SAML1</SSO> -->
+              <!-- <SSO discoveryProtocol="SAMLDS" discoveryURL="https://wayf.incommonfederation.org/DS/WAYF">SAML2 SAML1</SSO> -->
+              <!--
+              <SSO>SAML2 SAML1</SSO>
+              -->
+              <!--
+              <SSO entityID="https://openidp.nii.ac.jp/idp/shibboleth"
+                    discoveryProtocol="SAMLDS" discoveryURL="https://openidp.nii.ac.jp/DS/WAYF">
+                 SAML2 SAML1
+              </SSO>
+              -->
+              <SSO
+                  discoveryProtocol="SAMLDS"
+                  discoveryURL="{{ .Values.admin.apache.shibboleth.ds_url }}">
+                SAML2 SAML1
+              </SSO>
+
+              <!-- SAML and local-only logout. -->
+              <Logout>SAML2 Local</Logout>
+
+              <!-- Extension service that generates "approximate" metadata based on SP configuration. -->
+              <Handler type="MetadataGenerator" Location="/Metadata" signing="false"/>
+
+              <!-- Status reporting service. -->
+              <!-- <Handler type="Status" Location="/Status" acl="127.0.0.1 ::1"/> -->
+              <Handler type="Status" Location="/Status"/>
+
+              <!-- Session diagnostic service. -->
+              <!-- <Handler type="Session" Location="/Session" showAttributeValues="false"/> -->
+              <Handler type="Session" Location="/Session" showAttributeValues="true"/>
+
+              <!-- JSON feed of discovery information. -->
+              <Handler type="DiscoveryFeed" Location="/DiscoFeed"/>
+
+              <SessionInitiator type="Chaining" Location="/DS" id="DS"
+                                isDefault="true">
+                   <SessionInitiator type="SAML2" template="bindingTemplate.html"/>
+                   <SessionInitiator type="Shib1"/>
+                   <SessionInitiator type="Form" template="discoveryTemplate.html" />
+  <!--
+                  <SessionInitiator type="SAML2" entityID="https://openidp.nii.ac.jp/idp/shibboleth" />
+             <SessionInitiator type="SAMLDS" URL="{{ .Values.admin.apache.shibboleth.ds_url }}"/>
+  -->
+             </SessionInitiator>
+          </Sessions>
+
+          <!--
+          Allows overriding of error template information/filenames. You can
+          also add attributes with values that can be plugged into the templates.
+          -->
+          <Errors supportContact="rdm_support@nii.ac.jp" helpLocation="/about.html" styleSheet="/shibboleth-sp/main.css"/>
+          <!-- <Errors supportContact="EMAIL" logoLocation="/shibboleth-sp/logo.jpg" styleSheet="/shibboleth-sp/main.css"/> -->
+
+          <!-- Example of remotely supplied batch of signed metadata. -->
+          <!--
+          <MetadataProvider type="XML" uri="http://federation.org/federation-metadata.xml"
+                backingFilePath="federation-metadata.xml" reloadInterval="7200">
+              <MetadataFilter type="RequireValidUntil" maxValidityInterval="2419200"/>
+              <MetadataFilter type="Signature" certificate="fedsigner.pem"/>
+          </MetadataProvider>
+          <MetadataProvider type="XML" uri="https://metadata.gakunin.nii.ac.jp/gakunin-test-metadata.xml"
+                backingFilePath="test-federation-metadata.xml" reloadInterval="7200">
+              <MetadataFilter type="RequireValidUntil" maxValidityInterval="1296000"/>
+              <MetadataFilter type="Signature" certificate="/etc/shibboleth/gakunin-test-signer-2011.cer"/>
+          </MetadataProvider>
+          -->
+
+          <MetadataProvider type="XML" uri="https://metadata.gakunin.nii.ac.jp/gakunin-metadata.xml"
+                backingFilePath="federation-metadata.xml" reloadInterval="7200">
+              <MetadataFilter type="RequireValidUntil" maxValidityInterval="1296000"/>
+              <MetadataFilter type="Signature" certificate="/etc/shibboleth/gakunin-signer.cer"/>
+          </MetadataProvider>
+
+          <!-- Example of locally maintained metadata. -->
+          {{- if hasKey .Values.admin.apache.secretFiles "shibboleth/locally-IdP-metadata.xml" -}}
+          <MetadataProvider type="XML" file="locally-IdP-metadata.xml"/>
+          {{- end -}}
+          <!--
+          <MetadataProvider type="XML" file="partner-metadata.xml"/>
+          -->
+
+          <!-- InCommon -->
+          <!-- <MetadataProvider type="XML" uri="http://md.incommon.org/InCommon/InCommon-metadata.xml"
+                            backingFilePath="incommon-idp-metadata.xml" reloadInterval="86400">
+              <MetadataFilter type="Signature" certificate="incommon-idp-signature.pem"/>
+          </MetadataProvider> -->
+
+          <AttributeResolver type="SimpleAggregation" attributeId="eppn"
+                             format="urn:oid:1.3.6.1.4.1.5923.1.1.1.6">
+            <Entity>https://sptest.cg.gakunin.jp/idp/shibboleth</Entity>
+            <saml2:Attribute
+                xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion"
+                Name="urn:oid:1.3.6.1.4.1.5923.1.5.1.1"
+                NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"
+                FriendlyName="isMemberOf"/>
+            <saml2:Attribute
+                xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion"
+                Name="urn:oid:1.3.6.1.4.1.5923.1.1.1.10"
+                NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"
+                FriendlyName="eduPersonTargetedID"/>
+          </AttributeResolver>
+
+          <!-- Map to extract attributes from SAML assertions. -->
+          <AttributeExtractor type="XML" validate="true" reloadChanges="false" path="attribute-map.xml"/>
+
+          <!-- Use a SAML query if no attributes are supplied during SSO. -->
+          <AttributeResolver type="Query" subjectMatch="true"/>
+
+          <!-- Default filtering policy for recognized attributes, lets other data pass. -->
+          <AttributeFilter type="XML" validate="true" path="attribute-policy.xml"/>
+
+          <!-- Simple file-based resolver for using a single keypair. -->
+          <CredentialResolver type="File" key="sp-key.pem" certificate="sp-cert.pem"/>
+
+          <!--
+          The default settings can be overridden by creating ApplicationOverride elements (see
+          the https://wiki.shibboleth.net/confluence/display/SHIB2/NativeSPApplicationOverride topic).
+          Resource requests are mapped by web server commands, or the RequestMapper, to an
+          applicationId setting.
+
+          Example of a second application (for a second vhost) that has a different entityID.
+          Resources on the vhost would map to an applicationId of "admin":
+          -->
+          <!--
+          <ApplicationOverride id="admin" entityID="https://admin.example.org/shibboleth"/>
+          -->
+      </ApplicationDefaults>
+
+      <!-- Policies that determine how to process and authenticate runtime messages. -->
+      <SecurityPolicyProvider type="XML" validate="true" path="security-policy.xml"/>
+
+      <!-- Low-level configuration about protocols and bindings available for use. -->
+      <ProtocolProvider type="XML" validate="true" reloadChanges="false" path="protocols.xml"/>
+
+  </SPConfig>
+httpd/conf.d/shib.conf: |-
+  <IfModule mod_proxy.c>
+    ProxyRequests off
+    <Proxy *>
+      AddDefaultCharset off
+      Require all granted
+    </Proxy>
+    ProxyVia On
+    SetEnv proxy-initial-not-pooled 1
+  </IfModule>
+
+  LoadModule mod_shib /usr/lib64/shibboleth/mod_shib_24.so
+  LoadModule usertrack_module modules/mod_usertrack.so
+
+  RemoteIPHeader X-Forwarded-For
+  RemoteIPInternalProxy 10.0.0.0/8
+  RemoteIPInternalProxy 172.16.0.0/12
+  RemoteIPInternalProxy 192.168.0.0/16
+
+  <IfModule log_config_module>
+      LogFormat "%a %{X-Forwarded-For}i %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\" %v \"%{cookie}i\"" combined
+      SetEnvIfNoCase User-Agent "kube-probe/*" dontlog
+  </IfModule>
+
+  <VirtualHost *:{{ .Values.admin.service.internalPort }}>
+    ServerName https://{{ .Values.configEnvs.OSF_ADMIN_NAME }}
+    ServerAlias rdm-osf-osf-admin
+    UseCanonicalName On
+    ServerAdmin admin@osf.io
+
+    AllowEncodedSlashes NoDecode
+
+    # the google health check must have a 200 from /
+    RewriteEngine On
+    RewriteCond %{HTTP_USER_AGENT} "googlehc" [NC]
+    SetEnvIfNoCase User-Agent "googlehc" dontlog
+    RewriteRule ^/ - [L,R=200]
+
+    # Redirect HTTP to HTTPS
+    RewriteCond %{HTTP:X-Forwarded-Proto} =http [NC]
+    RewriteRule . https://%{HTTP:Host}%{REQUEST_URI} [L,R=permanent]
+
+    <Location />
+      # ShibDisable on
+      ShibRequestSetting REMOTE_ADDR X-Forwarded-For
+
+      ProxyPreserveHost On
+      ProxyPass http://127.0.0.1:{{ .Values.admin.service.externalPort }}/ nocanon
+      ProxyPassReverse http://127.0.0.1:{{ .Values.admin.service.externalPort }}/
+    </Location>
+
+    <Location ~ "^/account/shib-login">
+      AuthType shibboleth
+      ShibRequestSetting REMOTE_ADDR X-Forwarded-For
+      ShibRequestSetting requireSession 1
+
+      <RequireAll>
+        require shibboleth
+        {{- if (index .Values.admin.apache "additionalRequirements") }}
+        {{- .Values.admin.apache.additionalRequirements | nindent 10 }}
+        {{- end }}
+      </RequireAll>
+
+      # https://wiki.shibboleth.net/confluence/display/SHIB2/NativeSPSpoofChecking
+      # - Jetty 9 drops AJP Support (https://bugs.eclipse.org/bugs/show_bug.cgi?id=425244)
+      ShibUseEnvironment off
+      ShibUseHeaders on
+
+      #ProxyPass http://127.0.0.1:{{ .Values.admin.service.externalPort }}/account/shib-login
+      #ProxyPassReverse http://127.0.0.1:{{ .Values.admin.service.externalPort }}/account/shib-login
+    </Location>
+
+    <Location /Shibboleth.sso>
+      ProxyPass !
+      SetHandler shib
+    </Location>
+
+    <Location /static>
+      ProxyPass !
+      Require all granted
+    </Location>
+    Alias /static "/static/code/admin"
+    <Location /js/embedded-wayf_config.js>
+      ProxyPass !
+      Require all granted
+    </Location>
+    Alias /js/embedded-wayf_config.js "/etc/shibboleth/embedded-wayf_config.js"
+    <Location /js/embedded-wayf_disp.js>
+      ProxyPass !
+      Require all granted
+    </Location>
+    Alias /js/embedded-wayf_disp.js "/etc/shibboleth/embedded-wayf_disp.js"
+    <Location /js/admin.js>
+      ProxyPass !
+      Require all granted
+    </Location>
+    Alias /js/admin.js "/etc/shibboleth/admin.js"
+    <Location /js/admin.css>
+      ProxyPass !
+      Require all granted
+    </Location>
+    Alias /js/admin.css "/etc/shibboleth/admin.css"
+  </VirtualHost>
+  <VirtualHost *:{{ .Values.admin.service.internalPort }}>
+    ServerName health
+    LoadModule status_module "modules/mod_status.so"
+
+    <Location "/healthz">
+      LogLevel crit
+      Require ip 10.0.0.0/8
+      Require local
+      SetHandler server-status
+    </Location>
+  </VirtualHost>
+shibboleth/discoveryTemplate.html: |-
+  <html>
+          <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>{{ .Values.configEnvs.OSF_PAGE_NAME }} Admin | Sign In</title>
+    <link rel="stylesheet" href="/css/admin.css" />
+    <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+  
+    <!--[if lt IE 9]>
+      <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.6.1/html5shiv.js" type="text/javascript"></script>
+    <![endif]-->
+  
+    <link href='https://fonts.googleapis.com/css?family=Open+Sans:400,600,300,700' rel='stylesheet' type='text/css'>
+  </head>
+          <body>
+  <body id="cas">
+      <div id="container">
+          </br>
+          <header>
+              
+              <a id="logo" href="https://{{ .Values.configEnvs.OSF_SERVICE_NAME }}/" title="GakuNin RDM Sign In">GakuNin RDM</a>
+              </br>
+              <div align="center" class="center">
+                  <span id="title">GakuNin RDM</span>
+              </div>
+          </header>
+      </br>
+  
+  
+  <div align="center" width="50%">
+  
+  <h2>所属機関の選択(管理者画面ログイン)</h2>
+  
+  <p>
+  GakuNin RDMを利用するため、所属機関で認証する必要があります。所属機関を選択してください。
+  <br />
+  ※このページを表示して時間が経過している場合は、再読み込みしてから所属機関を選択してください。正しいページに戻れない場合があります。
+  </p>
+  </div>
+  
+  <div id="content" style="width: 50%; overflow: visible;">
+  
+  <div class="box" id="login">
+  
+  <!-- EMBEDDED-WAYF-START -->
+  <script type="text/javascript" src="/js/embedded-wayf_config.js"></script>
+  <script type="text/javascript">
+  wayf_sp_samlDSURL = "<shibmlp action/>".replace(/&#58;/g, ":");
+  <shibmlpif target>
+  wayf_return_url = "<shibmlp target/>".replace(/&#58;/g, ":");
+  </shibmlpif>
+  //wayf_show_remember_checkbox = true;
+  //wayf_force_remember_for_session = true;
+  wayf_auto_login = true;
+  </script>
+  
+  <script type="text/javascript" charset="UTF-8"><!--
+    document.write('<script type="text/javascript" src="{{ .Values.admin.apache.shibboleth.embedded_ds }}?' + (new Date().getTime()) + '"></scr'+'ipt>');
+  //-->
+  </script>
+  
+  <noscript>
+    <!-- 
+    Fallback to Shibboleth DS session initiator for non-JavaScript users 
+    You should set the value of the target GET parameter to an URL-encoded 
+    absolute URL that points to a Shibboleth protected web page where the user 
+    is logged in into your application.
+    -->
+    <p>
+      <strong>ログイン:</strong> あなたのブラウザでJavaScriptが無効になっています。学認(運用フェデレーション)に参加しているIdPを選択する場合は<a href="/Shibboleth.sso/Login?target=<shibmlp target/>">こちらをクリックしてください</a>。
+    </p>
+  </noscript>
+  
+  <!-- EMBEDDED-WAYF-END -->
+  
+  </div>
+  
+  <noscript>
+  <p>もしくは以下のテキストボックスに所属機関IdPのentityIDを入力して[選択]ボタンを押してください。</p>
+                  <form method="GET" action="<shibmlp action/>">
+              <shibmlpif target>
+                  <input type="hidden" name="target" value="<shibmlp target/>"/>
+              </shibmlpif>
+  
+              <shibmlpif acsIndex>
+                  <input type="hidden" name="acsIndex" value="<shibmlp acsIndex/>"/>
+              </shibmlpif>
+  
+              <shibmlpif isPassive>
+                  <input type="hidden" name="isPassive" value="<shibmlp isPassive/>"/>
+              </shibmlpif>
+  
+              <shibmlpif forceAuthn>
+                  <input type="hidden" name="forceAuthn" value="<shibmlp forceAuthn/>"/>
+              </shibmlpif>
+  
+              <shibmlpif authnContextClassRef>
+                  <input type="hidden" name="authnContextClassRef" value="<shibmlp authnContextClassRef/>"/>
+              </shibmlpif>
+  
+              <shibmlpif authnContextComparison>
+                  <input type="hidden" name="authnContextComparison" value="<shibmlp authnContextComparison/>"/>
+              </shibmlpif>
+              
+                      <input type="text" name="entityID" value="<shibmlp entityID/>">
+                      <input type="submit" value="選択"/>
+                  </form>
+  </noscript>
+                  
+                  <shibmlpif entityID>
+                  <p>The system was unable to determine how to proceed using the value you supplied.</p>
+                  </shibmlpif>
+  
+      <div class="row" style="text-align: center;">
+          <hr>
+          <a id="back-to-osf" href="https://{{ .Values.configEnvs.OSF_SERVICE_NAME }}/">Back to GakuNin RDM</a></br>
+      </div>
+  </div>
+  
+  <footer>
+      <div class="container copyright" style="text-size: 16px">
+      <div class="row">
+          <div class="col-md-12">
+              <script>
+              document.write('<p><font size="+1">Copyright &copy; 2017-' + (new Date().getUTCFullYear()) + ' <a href="http://www.nii.ac.jp/">National&nbsp;Institute&nbsp;of&nbsp;Informatics</a></font></p>');
+              </script>
+          </div>
+      </div>
+      </div><!-- end container copyright -->
+  </footer>
+  
+  </div> <!-- END #container -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/headjs/1.0.3/head.min.js"></script>
+  
+  <script type="text/javascript" src="/js/admin.js"></script>
+  
+  
+  </body>
+  </html>
+shibboleth/embedded-wayf_config.js: |-
+  // To use this JavaScript, please access:
+  // https://ds.gakunin.nii.ac.jp/WAYF/embedded-wayf.js/snippet.html
+  // and copy/paste the resulting HTML snippet to an unprotected web page that 
+  // you want the embedded WAYF to be displayed
+  
+  
+  //////////////////// ESSENTIAL SETTINGS ////////////////////
+  
+  // URL of the WAYF to use
+  // Examples: "https://wayf.switch.ch/SWITCHaai/WAYF", "https://wayf-test.switch.ch/aaitest/WAYF";
+  // [Mandatory]
+  var wayf_URL = "{{ .Values.admin.apache.shibboleth.ds_url }}";
+  
+  // EntityID of the Service Provider that protects this Resource
+  // Examples: "https://econf.switch.ch/shibboleth", "https://dokeos.unige.ch/shibboleth"
+  // [Mandatory]
+  var wayf_sp_entityID = "https://{{ .Values.configEnvs.OSF_ADMIN_NAME }}/shibboleth-sp";
+  
+  // Shibboleth Service Provider handler URL
+  // Examples: "https://point.switch.ch/Shibboleth.sso", "https://rr.aai.switch.ch/aaitest/Shibboleth.sso"
+  // [Mandatory, if wayf_use_discovery_service = false]
+  //wayf_use_discovery_service = true;
+  var wayf_sp_handlerURL = "https://{{ .Values.configEnvs.OSF_ADMIN_NAME }}/Shibboleth.sso";
+  
+  // URL on this resource that the user shall be returned to after authentication
+  // Examples: "https://econf.switch.ch/aai/home", "https://olat.uzh.ch/my/courses"
+  // [Mandatory]
+  //var wayf_return_url = "https://{{ .Values.configEnvs.OSF_CAS_NAME }}/login?service=https://{{ .Values.configEnvs.OSF_SERVICE_NAME }}/";
+  var wayf_return_url = "https://{{ .Values.configEnvs.OSF_ADMIN_NAME }}/account/shib-login";
+  
+  
+  //////////////////// RECOMMENDED SETTINGS ////////////////////
+  
+  // Width of the embedded WAYF in pixels or "auto"
+  // This is the width of the content only (without padding and border). 
+  // Add 2 x (10px + 1px) = 22px for padding and border to get the actual 
+  // width of everything that is drawn.
+  // [Optional, default: "auto"]
+  var wayf_width = 430;
+  
+  // Height of the embedded WAYF in pixels or "auto"
+  // This is the height of the content only (without padding and border). 
+  // Add 2 x (10px + 1px) = 22px for padding and border to get the actual 
+  // height of everything that is drawn.
+  // [Optional, default: "auto"]
+  var wayf_height = "auto";
+  
+  // Whether to show the checkbox to remember settings for this session
+  // [Optional, default: true]
+  var wayf_show_remember_checkbox = false;
+  
+  // Force the user's Home Organisation selection to be remembered for the
+  // current browser session. If wayf_show_remember_checkbox is true
+  // the checkbox will be shown but will be read only.
+  // WARNING: Only use this feature if you know exactly what you are doing
+  //          This option will cause problems that are difficult to find 
+  //          in case they accidentially select a wrong Home Organisation
+  // [Optional, false]
+  var wayf_force_remember_for_session = false;
+  
+  // Logo size
+  // Choose whether the small or large logo shall be used
+  // [Optional, default: true]
+  var wayf_use_small_logo = true;
+  var wayf_hide_logo = true;
+  var wayf_show_categories = false;
+  var wayf_overwrite_intro_text="";
+  
+  // Font size
+  // [Optional, default: 12]
+  var wayf_font_size = 11;
+  
+  // Font color
+  // [Optional, default: #000000]
+  var wayf_font_color = '#000000';
+  
+  // Border color
+  // [Optional, default: #00247D]
+  var wayf_border_color = '#00247D';
+  
+  // Background color
+  // [Optional, default: #F4F7F7]
+  var wayf_background_color = '#F4F7F7';
+  
+  // Whether to automatically log in user if he has a session/permanent redirect
+  // cookie set at central wayf
+  // [Optional, default: true]
+  var wayf_auto_login = true;
+  
+  // Whether to hide the WAYF after the user was logged in
+  // This requires that the _shib_session_* cookie is set when a user 
+  // could be authenticated, which is the default case when Shibboleth is used.
+  // For other Service Provider implementations have a look at the setting
+  // wayf_check_login_state_function that allows you to customize this
+  // [Optional, default: false]
+  var wayf_hide_after_login = false;
+  
+  // Whether or not to show the categories in the drop-down list
+  // Possible values are: true or false
+  // [Optional, default: true]
+  var wayf_show_categories =  false;
+  
+  // Most used Identity Providers will be shown as top category in the drop down
+  // list if this feature is used.
+  // [Optional, commented out by default]
+  // var wayf_most_used_idps =  new Array("https://aai-logon.unibas.ch/idp/shibboleth", "https://aai.unil.ch/idp/shibboleth");
+  
+  // Categories of Identity Provider that shall not be shown
+  // Possible values are: "hokkaido","tohoku","kanto","chubu","kinki","chugoku","shikoku","kyushu","others", "all"
+  // Example of how to hide categories
+  // var wayf_hide_categories =  new Array("other", "library");
+  // [Optional, commented out by default]
+  // var wayf_hide_categories =  new Array();
+  var wayf_hide_categories =  new Array("all");
+  
+  // EntityIDs of Identity Provider whose category is hidden but that shall be shown anyway
+  // If this array is not empty, wayf_show_categories will be disabled because
+  // otherwise, unhidden IdPs may be displayed in the wrong category
+  // Example of how to unhide certain Identity Providers
+  // var wayf_unhide_idps = new Array("https://aai-login.uzh.ch/idp/shibboleth");
+  // [Optional, commented out by default]
+  // var wayf_unhide_idps = new Array();
+  var wayf_unhide_idps = new Array("https://openidp.nii.ac.jp/idp/shibboleth", "https://idp.rdm.nii.ac.jp/idp/shibboleth");
+  
+  // EntityIDs of Identity Provider that shall not be shown at all
+  // Example of how to hide certain Identity Provider
+  // var wayf_hide_idps = new Array("https://idp.unige.ch/idp/shibboleth", "https://lewotolo.switch.ch/idp/shibboleth");
+  // [Optional, commented out by default]
+  // var wayf_hide_idps = new Array();
+  
+  //////////////////// ADVANCED SETTINGS ////////////////////
+  
+  // Use the SAML2/Shibboleth 2 Discovery Service protocol where
+  // the user is sent back to the Service Provider after selection
+  // of his Home Organisation.
+  // This is true by default and it should only be uncommented and set to false
+  // if there is a good reason why to use the old and deprecated Shibboleth WAYF
+  // protocol instead.
+  // [Optional, default: commented out]
+  // var wayf_use_discovery_service = false;
+  
+  // Session Initiator URL of the Service Provider
+  // Examples: "https://econf.switch.ch/Shibboleth.sso/DS", "https://dokeos.unige.ch/Shibboleth.sso/DS"
+  // This will implicitely be set to wayf_sp_samlDSURL = wayf_sp_handlerURL + "/DS";
+  // [Optional, if wayf_use_discovery_service = true 
+  //  or if wayf_additional_idps is not empty, default: commented out]
+  // var wayf_sp_samlDSURL = wayf_sp_handlerURL + "/Login";
+  
+  // Default IdP to preselect when central WAYF couldn't guess IdP either
+  // This is usually the case the first time ever a user accesses a resource
+  // [Optional, default: commented out]
+  // var wayf_default_idp = "https://aai.switch.ch/idp/shibboleth";
+  
+  // Set a custom Assertion Consumer URL instead of
+  // the default wayf_sp_handlerURL + '/SAML/POST'
+  // Only relevant if wayf_use_discovery_service is false
+  // Examples: "https://olat.uzh.ch/shib/samlaa", 
+  // This will implicitely be set to wayf_sp_samlACURL = wayf_sp_handlerURL + "/SAML/POST";
+  // "https://foodle.feide.no/simplesaml/shib13/sp/AssertionConsumerService.php"
+  // [Optional, commented out by default]
+  // var wayf_sp_samlACURL = "https://maclh.switch.ch/foo/bar";
+  
+  // Overwites the text of the checkbox if
+  // wayf_show_remember_checkbox is set to true
+  // [Optional, commented out by default]
+  // var wayf_overwrite_checkbox_label_text = 'Save setting for today';
+  
+  // Overwrites the text of the submit button
+  // [Optional, commented out by default]
+  // var wayf_overwrite_submit_button_text = 'Go';
+  
+  // Overwrites the intro text above the drop-down list
+  // [Optional, commented out by default]
+  // var wayf_overwrite_intro_text = 'Select your Home Organisation to log in';
+  
+  // Overwrites the category name of the most used IdP category in the drop-down list
+  // [Optional, commented out by default]
+  // var wayf_overwrite_most_used_idps_text = 'Most popular';
+  
+  
+  // Whether to hide the WAYF after the user was logged in
+  // This requires that the _shib_session_* cookie is set when a user 
+  // could be authenticated
+  // If you want to hide the embedded WAYF completely, uncomment
+  // the property and set it to "". This then won't draw anything
+  // [Optional, default commented out: You are already logged in]
+  // var wayf_logged_in_messsage = "";
+  
+  // Provide the name of a JavaScript function that checks whether the user
+  // already is logged in. The function should return true if the user is logged
+  // in or false otherwise. If the user is logged in, the Embedded WAYF will
+  // hide itself or draw a custom message depending on the 
+  // setting wayf_logged_in_messsage
+  // The function you specify has of course to be implemented by yourself!
+  // [Optional, commented out by default]
+  // var wayf_check_login_state_function = function() { 
+  // if (# specify user-is-logged-in condition#)
+  //   return true;
+  // else 
+  //   return false;
+  // }
+  
+  // EntityIDs, Names and SSO URLs of Identity Providers from other federations 
+  // that shall be added to the drop-down list
+  // The IdPs will be displayed in the sequence they are defined
+  // [Optional, commented out by default]
+  // var wayf_additional_idps = [ ];
+  // Example of how to add Identity Provider from other federations
+  // var wayf_additional_idps = [ 
+  //        
+  //        {name:"International University X",
+  //        entityID:"urn:mace:switch.ch:SWITCHaai:example.university.org",
+  //        SAML1SSOurl:"https://int.univ.org/shibboleth-idp/SSO"},
+  //
+  //        {name:"Some Other University",
+  //        entityID:"https://other.univ.edu/idp/shibboleth",
+  //        SAML1SSOurl:"https://other.univ.edu/shibboleth-idp/SSO"},
+  // ];
+  
+  var wayf_additional_idps = [
+        {name:"OpenIdP",
+        entityID:"https://openidp.nii.ac.jp/idp/shibboleth",
+        SAML1SSOurl:"https://openidp.nii.ac.jp/idp/profile/Shibboleth/SSO"},
+  ];
+  
+  
+  // The list which is the target of incremental search is extracted to IdP acquired by DiscpFeed
+  // URL of DiscpFeed is set up
+  // var wayf_discofeed_url = "https://point.switch.ch/Shibboleth.sso/DiscoFeed";
+  // [Optional, commented out by default]
+  // var wayf_discofeed_url = "";
+  
+  // The path of Cookie created by SP is set. As for default configuration, 
+  // the path of an access place is set.
+  // var wayf_sp_cookie_path = "/";
+  // [Optional, commented out by default]
+  // var wayf_sp_cookie_path = "";
+  var wayf_sp_cookie_path = "/";
+  
+  // Height of the embedded WAYF IdP List in pixels
+  // [Optional, default: 150]
+  var wayf_list_height = 350;
+  
+  
+  //////////////////// ADDITIONAL CSS CUSTOMIZATIONS ////////////////////
+  
+  // To further customize the appearance of the Embedded WAYF you could
+  // define CSS rules for the following CSS IDs that are used within the 
+  // Embedded WAYF:
+  // #wayf_div                     - Container for complete Embedded WAYF
+  // #wayf_logo_div                - Container for logo
+  // #wayf_logo                    - Image for logo
+  // #wayf_intro_div               - Container of drop-down list intro label
+  // #wayf_intro_label             - Label of intro text
+  // #IdPList                      - The form element
+  // #user_idp                     - Select element for drop-down list
+  // #wayf_remember_checkbox_div   - Container of checkbox and its label
+  // #wayf_remember_checkbox       - Checkbox for remembering settings for session
+  // #wayf_remember_checkbox_label - Text of checkbox
+  // #wayf_submit_button           - Submit button
+  //
+  // Use these CSS IDs carefully and at own risk because future updates could
+  // interfere with the rules you created and the IDs may change without notice!
+  
+  
+  //-->
+{{- end }}
+
+{{- define "osf.admin.fileconfigs" -}}
+{{- range $path, $bytes := .Files.Glob "files/admin/**" }}
+{{ $path | trimPrefix "files/admin/" }}: |-
+{{ printf "%s" $bytes | indent 2 }}
+{{- end }}
+{{- end -}}
+
+{{- range $key, $value := .Values.admin.apache.configEnvs }}
+  admin-{{ $key }}: {{ $value | quote }}
+{{- end }}
+{{- range $key, $value := merge .Values.admin.apache.configFiles (include "osf.admin.inlineconfigs" . | fromYaml) (include "osf.admin.fileconfigs" . | fromYaml) }}
+  admin-{{ $key | replace "/" "-" }}: |-
+    {{- $value | nindent 4 }}
+{{- end }}
+
+  {{- range $key, $value := .Values.configEnvs }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- range $key, $value := merge .Values.configFiles (include "osf.inlineconfigs" . | fromYaml) ((.Files.Glob "files/*").AsConfig | fromYaml) }}
+  {{ $key }}: |-
+    {{- $value | nindent 4 }}
+  {{- end }}

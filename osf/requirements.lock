@@ -1,0 +1,21 @@
+dependencies:
+- name: elasticsearch
+  repository: file://../elasticsearch
+  version: 0.5.1
+- name: elasticsearch
+  repository: file://../elasticsearch
+  version: 0.5.1
+- name: maintenance
+  repository: file://../maintenance
+  version: 0.1.0
+- name: postgresql
+  repository: https://kubernetes-charts.storage.googleapis.com
+  version: 0.8.1
+- name: rabbitmq
+  repository: file://../rabbitmq
+  version: 0.6.8
+- name: redis
+  repository: file://../redis
+  version: 1.1.2
+digest: sha256:ff305d21745e73447e16746e0df559465a6bedc5fb9ee49322096946d28a1a46
+generated: 2018-10-12T13:27:42.988162-04:00

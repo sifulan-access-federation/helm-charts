@@ -1,0 +1,159 @@
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "mfr.fullname" . }}
+  labels:
+    app: {{ template "mfr.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  {{- if .Values.strategy }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "mfr.name" . }}
+        release: {{ .Release.Name }}
+      annotations:
+        {{- include "mfr.deploymentAnnotations" . | nindent 8 }}
+    spec:
+      affinity:
+        {{- if .Values.additionalAffinities }}
+        {{- toYaml .Values.additionalAffinities | nindent 8 }}
+        {{- end }}
+        {{- if eq .Values.antiAffinity "hard" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: {{ template "mfr.name" . }}
+                  release: {{ .Release.Name }}
+        {{- else if eq .Values.antiAffinity "soft" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: {{ template "mfr.name" . }}
+                    release: {{ .Release.Name }}
+        {{- end }}
+      containers:
+        - name: nginx
+          image: "{{ .Values.nginx.image.repository }}:{{ .Values.nginx.image.tag }}"
+          imagePullPolicy: {{ .Values.nginx.image.pullPolicy }}
+          command:
+            - nginx
+            - -c
+            - /etc/nginx/nginx.conf
+            - -g
+            - daemon off;
+          ports:
+            - name: http-internal
+              containerPort: {{ .Values.service.internalPort }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.internalPort }}
+            initialDelaySeconds: 10
+          volumeMounts:
+            - name: config
+              subPath: nginx.conf
+              mountPath: /etc/nginx/nginx.conf
+              readOnly: true
+            - name: config
+              subPath: robots.txt
+              mountPath: /usr/share/nginx/html/robots.txt
+              readOnly: true
+          resources:
+            {{- toYaml .Values.nginx.resources | nindent 12 }}
+        - name: tornado
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - gosu
+            - www-data
+            - invoke
+            - server
+          env:
+            {{- include "mfr.environment" . | nindent 12 }}
+            - name: ENV
+              value: kube
+          ports:
+            - name: http-external
+              containerPort: {{ .Values.service.externalPort }}
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: {{ .Values.service.externalPort }}
+          volumeMounts:
+            - name: secret
+              subPath: settings.json
+              mountPath: /home/.cos/mfr-kube.json
+              readOnly: true
+            - name: localcache
+              mountPath: /tmp/mfrlocalcache
+          resources:
+            {{- toYaml .Values.tornado.resources | nindent 12 }}
+        - name: unoconv
+          image: "{{ .Values.unoconv.image.repository }}:{{ .Values.unoconv.image.tag }}"
+          imagePullPolicy: {{ .Values.unoconv.image.pullPolicy }}
+          command:
+            - gosu
+            - www-data
+            - /usr/bin/python3.7
+            - /usr/local/bin/unoconv
+            - --listener
+            - --server
+            - 0.0.0.0
+            - --port
+            - '2002'
+            - -vvv
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |-
+                  cd /tmp
+                  touch test.txt
+                  timeout 10 nice -n -20 /usr/bin/python3.7 /usr/local/bin/unoconv -f html test.txt
+                  exit $?
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 10
+          ports:
+            - name: unoconv
+              containerPort: 2002
+          volumeMounts:
+            - name: localcache
+              mountPath: /tmp/mfrlocalcache
+            {{- if .Values.unoconv.volumeMounts }}
+            {{- toYaml .Values.unoconv.volumeMounts | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.unoconv.resources | nindent 12 }}
+      volumes:
+        - name: localcache
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: {{ template "mfr.fullname" . }}
+        - name: secret
+          secret:
+            secretName: {{ template "mfr.fullname" . }}
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.image.pullSecret }}
+      imagePullSecrets:
+      - name: {{ .Values.image.pullSecret }}
+      {{- end }}

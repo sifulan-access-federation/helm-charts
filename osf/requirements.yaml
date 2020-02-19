@@ -1,0 +1,28 @@
+dependencies:
+  # WORKAROUND: ElasticSearch chart versions must match due to a bug in helm package, see: https://github.com/helm/helm/issues/3909
+  - name: elasticsearch
+    version: 0.5.1
+    repository: file://../elasticsearch
+    condition: elasticsearch.enabled, global.elasticsearch.enabled
+    alias: elasticsearch
+  - name: elasticsearch
+    version: 0.5.1
+    repository: file://../elasticsearch
+    condition: elasticsearch6.enabled, global.elasticsearch6.enabled
+    alias: elasticsearch6
+  - name: maintenance
+    version: 0.1.0
+    repository: file://../maintenance
+    condition: maintenance.enabled, global.maintenance.enabled
+  - name: postgresql
+    version: 0.8.1
+    repository: https://kubernetes-charts.storage.googleapis.com
+    condition: postgresql.enabled, global.postgresql.enabled
+  - name: rabbitmq
+    version: 0.6.8
+    repository: file://../rabbitmq
+    condition: rabbitmq.enabled, global.rabbitmq.enabled
+  - name: redis
+    version: 1.1.2
+    repository: file://../redis
+    condition: redis.enabled, global.redis.enabled

@@ -1,0 +1,4 @@
+import os
+
+CLIENT_ID = os.environ['FIGSHARE_CLIENT_ID']
+CLIENT_SECRET = os.environ['FIGSHARE_CLIENT_SECRET']

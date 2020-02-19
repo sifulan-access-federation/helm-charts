@@ -1,0 +1,19 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  labels:
+    app: {{ template "http-redirect.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+  name: {{ template "http-redirect.fullname" . }}
+  {{- if .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  backend:
+    serviceName: {{ template "http-redirect.fullname" . }}
+    servicePort: {{ .Values.service.externalPort }}
+{{- end }}

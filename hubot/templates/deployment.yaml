@@ -1,0 +1,93 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "hubot.fullname" . }}
+  labels:
+    app: {{ template "hubot.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "hubot.name" . }}
+        release: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      affinity:
+        {{- if .Values.additionalAffinities }}
+        {{- toYaml .Values.additionalAffinities | nindent 8 }}
+        {{- end }}
+        {{- if eq .Values.antiAffinity "hard" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: {{ template "hubot.name" . }}
+                  release: {{ .Release.Name }}
+        {{- else if eq .Values.antiAffinity "soft" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: {{ template "hubot.name" . }}
+                    release: {{ .Release.Name }}
+        {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |-
+              while true; do
+                  yarn start &
+                  sleep ${TIMEOUT:-60m}
+                  pkill node
+              done
+          env:
+            {{- include "hubot.environment" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.internalPort }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.internalPort }}
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.internalPort }}
+            initialDelaySeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- range $key := keys (merge .Values.configFiles (include "hubot.inlineconfigs" . | fromYaml) (include "hubot.fileconfigs" . | fromYaml)) }}
+            - mountPath: /code/{{ $key }}
+              name: config
+              subPath: {{ $key | replace "/" "-" }}
+              readOnly: true
+            {{- end }}
+            {{- range $key := keys .Values.secretFiles }}
+            - mountPath: /code/{{ $key }}
+              name: secret
+              subPath: {{ $key | replace "/" "-" }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "hubot.fullname" . }}
+        - name: secret
+          secret:
+            secretName: {{ template "hubot.fullname" . }}

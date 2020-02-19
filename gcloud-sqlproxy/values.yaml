@@ -1,0 +1,94 @@
+## Google Cloud SQL Proxy image
+## ref: https://cloud.google.com/sql/docs/mysql/sql-proxy
+## ref: https://cloud.google.com/sql/docs/postgres/sql-proxy
+image: gcr.io/cloudsql-docker/gce-proxy
+imageTag: "1.13"
+
+## Specify a imagePullPolicy
+## 'Always' if imageTag is 'latest', else set to 'IfNotPresent'
+## ref: http://kubernetes.io/docs/user-guide/images/#pre-pulling-images
+##
+imagePullPolicy: IfNotPresent
+
+## Replicas Set count
+replicasCount: 1
+
+antiAffinity: "soft"
+# additionalAffinities:
+#   nodeAffinity:
+#     preferredDuringSchedulingIgnoredDuringExecution:
+#       - weight: 50
+#         preference:
+#           matchExpressions:
+#             - key: cloud.google.com/gke-preemptible
+#               operator: NotIn
+#               values:
+#                 - "true"
+
+# strategy:
+#   rollingUpdate:
+#     maxSurge: 25%
+#     maxUnavailable: 25%
+#   type: RollingUpdate
+
+## Set the GCP service account key JSON file.
+## Service account has access be set to Cloud SQL instances
+## the key must be encoded with base64
+## e.g. `cat service-account.json | base64`
+##
+serviceAccountKey: ""
+
+## SQL connection settings
+##
+cloudsql:
+  ## PostgreSQL/MySQL instance:
+  ## update with your GCP project, the region of your Cloud SQL instance
+  ## and the name of your Cloud SQL instance
+  instance: "PROJECT:REGION:INSTANCE"
+
+  ## PostgreSQL port 5432 or MySQL port 3306, or other port you set for your SQL instance
+  port: 5432
+
+## Configure resource requests and limits
+## ref: http://kubernetes.io/docs/user-guide/compute-resources/
+##
+resources:
+  requests:
+    cpu: 100m
+    memory: 100Mi
+  limits:
+    memory: 150Mi
+    cpu: 150m
+
+## Node selector
+nodeSelector: {}
+
+networkPolicy:
+  enabled: false
+  egress: {}
+    # # DNS
+    # - to:
+    #     - namespaceSelector: {}
+    #   ports:
+    #     - port: 53  # dns
+    #       protocol: TCP
+    #     - port: 53  # dns
+    #       protocol: UDP
+    # # Internet
+    # - to:
+    #     - ipBlock:
+    #         cidr: 0.0.0.0/0
+    #         except:
+    #           - 10.0.0.0/8
+    #           - 172.16.0.0/12
+    #           - 192.168.0.0/16
+    #   ports:
+    #     - port: 443  # ssl
+    #       protocol: TCP
+    # # CloudSQL
+    # - to:
+    #     - ipBlock:
+    #         cidr: 35.x.x.x/32 # Change to the public IP address of the instance
+    #   ports:
+    #     - port: 3307 # cloudsql postgres
+    #       protocol: TCP

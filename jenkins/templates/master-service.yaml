@@ -1,0 +1,27 @@
+{{- if .Values.agent.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "jenkins.fullname" . }}-{{ .Values.master.name }}
+  labels:
+    app: {{ template "jenkins.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    component: {{ .Values.master.name }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  ports:
+  - port: {{ .Values.service.jenkinsPort }}
+    targetPort: {{ .Values.service.jenkinsPort }}
+    protocol: TCP
+    name: http
+  - port: {{ .Values.agent.listenerPort }}
+    targetPort: {{ .Values.agent.listenerPort }}
+    protocol: TCP
+    name: agent-listener
+  selector:
+    app: {{ template "jenkins.name" . }}
+    component: {{ .Values.master.name }}
+    release: {{ .Release.Name }}
+{{- end }}

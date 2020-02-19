@@ -1,0 +1,15 @@
+apiVersion: v1
+description: The Open Science Framework (OSF)
+name: osf
+version: 0.16.4
+keywords:
+  - open
+  - science
+sources:
+  - https://github.com/CenterForOpenScience/osf.io
+maintainers:
+  - name: Matt Frazier
+    email: matt@cos.io
+    url: https://github.com/mfraezz
+engine: gotpl
+tillerVersion: '>=2.7.0'

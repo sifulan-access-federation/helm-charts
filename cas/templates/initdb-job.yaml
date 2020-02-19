@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-%s-initdb" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" }}-{{ .Release.Time.Seconds }}
+  labels:
+    app: {{ template "cas.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    component: "initdb"
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": pre-install
+spec:
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      name: "{{ .Release.Name }}"
+      labels:
+        app: {{ template "cas.name" . }}
+        component: "initdb"
+        release: {{ .Release.Name }}
+      annotations:
+        # Init containers not updated on upgrade : https://github.com/kubernetes/helm/issues/2702
+        {{- if semverCompare "<1.8-0" .Capabilities.KubeVersion.GitVersion }}
+        pod.alpha.kubernetes.io/init-containers: null
+        pod.beta.kubernetes.io/init-containers: null
+        {{- end }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: initdb
+          image: "postgres:9.6"
+          imagePullPolicy: Always
+          command:
+            - /bin/bash
+            - -c
+            - |-
+              if [ "${DATABASE_HOST}" == "" ] || [ "${DATABASE_USER}" == "" ] || [ "${DATABASE_PASSWORD}" == "" ]; then
+                exit 0
+              fi
+              echo "" > ~/.pgpass
+              echo "${DATABASE_HOST}:*:*:${DATABASE_USER}:${DATABASE_PASSWORD}" >> ~/.pgpass
+              echo "${DATABASE_HOST}:*:cas:${DATABASE_USER}:${DATABASE_PASSWORD}" >> ~/.pgpass
+              chmod 600 ~/.pgpass
+              psql -h ${DATABASE_HOST} -U ${DATABASE_USER} <<-EOSQL
+                CREATE DATABASE cas;
+              EOSQL
+          env:
+            {{- range tuple "DATABASE_HOST" "DATABASE_USER" "DATABASE_PASSWORD" }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: external-db
+                  key: {{ . }}
+                  optional: true
+            {{- end }}
+          volumeMounts:
+            - mountPath: /log
+              name: log
+      volumes:
+        - name: log
+          emptyDir: {}

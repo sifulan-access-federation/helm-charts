@@ -1,0 +1,117 @@
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "prerender.fullname" . }}
+  labels:
+    app: {{ template "prerender.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "prerender.name" . }}
+        release: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      affinity:
+        {{- if .Values.additionalAffinities }}
+        {{- toYaml .Values.additionalAffinities | nindent 8 }}
+        {{- end }}
+        {{- if eq .Values.antiAffinity "hard" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: {{ template "prerender.name" . }}
+                  release: {{ .Release.Name }}
+        {{- else if eq .Values.antiAffinity "soft" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: {{ template "prerender.name" . }}
+                    release: {{ .Release.Name }}
+        {{- end }}
+      containers:
+        - name: nginx
+          image: "{{ .Values.nginx.image.repository }}:{{ .Values.nginx.image.tag }}"
+          imagePullPolicy: {{ .Values.nginx.image.pullPolicy }}
+          command:
+            - nginx
+            - -c
+            - /etc/nginx/nginx.conf
+            - -g
+            - daemon off;
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.internalPort }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.internalPort }}
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.internalPort }}
+            initialDelaySeconds: 10
+          volumeMounts:
+            - mountPath: /etc/nginx/nginx.conf
+              name: config
+              subPath: nginx.conf
+              readOnly: true
+          {{- if .Values.nginx.resources }}
+          resources:
+            {{- toYaml .Values.nginx.resources | nindent 12 }}
+          {{- end }}
+        - name: nodejs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: "{{ .Values.service.externalPort }}"
+            {{- include "prerender.environment" . | indent 12 }}
+          ports:
+            - containerPort: {{ .Values.service.externalPort }}
+          livenessProbe:
+            httpGet:
+              path: /http://127.0.0.1:{{ .Values.service.internalPort }}/healthz
+              port: {{ .Values.service.externalPort }}
+            timeoutSeconds: 5
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.service.externalPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - mountPath: /dev/shm
+              name: dshm
+            {{- if .Values.volumeMounts }}
+            {{- toYaml .Values.volumeMounts | nindent 12 }}
+            {{- end }}
+          {{- if .Values.resources }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "prerender.fullname" . }}
+        - name: secret
+          secret:
+            secretName: {{ template "prerender.fullname" . }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shmSizeLimit }}

@@ -1,0 +1,146 @@
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "sharejs.fullname" . }}
+  labels:
+    app: {{ template "sharejs.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "sharejs.name" . }}
+        release: {{ .Release.Name }}
+      annotations:
+        {{- include "sharejs.deploymentAnnotations" . | nindent 8 }}
+    spec:
+      affinity:
+        {{- if .Values.additionalAffinities }}
+        {{- toYaml .Values.additionalAffinities | nindent 8 }}
+        {{- end }}
+        {{- if eq .Values.antiAffinity "hard" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: {{ template "sharejs.name" . }}
+                  release: {{ .Release.Name }}
+        {{- else if eq .Values.antiAffinity "soft" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: {{ template "sharejs.name" . }}
+                    release: {{ .Release.Name }}
+        {{- end }}
+      {{- if and .Values.tls.enabled .Values.tls.files }}
+      initContainers:
+        - name: certificates
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |-
+              cp -Rf /certs/* /etc/ssl/mongo
+              chown -R node:node /etc/ssl/mongo
+              chmod -R 0500 /etc/ssl/mongo
+          volumeMounts:
+            - name: certs
+              mountPath: /etc/ssl/mongo
+            {{- range $key := keys .Values.tls.files }}
+            - mountPath: /certs/{{ $key }}
+              name: secret
+              subPath: certs-{{ $key }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tls.caFiles }}
+            {{- range $key := keys .Values.tls.caFiles }}
+            - mountPath: /certs/CAs/{{ $key }}
+              name: secret
+              subPath: certs-{{ $key }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+      {{- end }}
+      containers:
+        - name: nginx
+          image: "{{ .Values.nginx.image.repository }}:{{ .Values.nginx.image.tag }}"
+          imagePullPolicy: {{ .Values.nginx.image.pullPolicy }}
+          command:
+            - nginx
+            - -c
+            - /etc/nginx/nginx.conf
+            - -g
+            - daemon off;
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.internalPort }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.internalPort }}
+          volumeMounts:
+            - mountPath: /etc/nginx/nginx.conf
+              name: config
+              subPath: nginx.conf
+              readOnly: true
+            - mountPath: /usr/share/nginx/html/robots.txt
+              name: config
+              subPath: robots.txt
+              readOnly: true
+          {{- if .Values.nginx.resources }}
+          resources:
+            {{- toYaml .Values.nginx.resources | nindent 12 }}
+          {{- end }}
+        - name: nodejs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- if and .Values.mongodb.enabled (hasKey .Values.configEnvs "SHAREJS_DB_URL" | not) }}
+            - name: SHAREJS_DB_URL
+              value: "mongodb://{{ include "mongodb.fullname" . }}:27017/{{ .Values.mongodb.mongodbDatabase }}"
+            {{- end }}
+            - name: SHAREJS_SERVER_HOST
+              value: "0.0.0.0"
+            - name: SHAREJS_SERVER_PORT
+              value: "{{ .Values.service.externalPort }}"
+            {{- include "sharejs.environment" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.externalPort }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.externalPort }}
+          {{- if and .Values.tls.enabled .Values.tls.files }}
+          volumeMounts:
+            - name: certs
+              mountPath: /etc/ssl/mongo
+          {{- end }}
+          {{- if .Values.resources }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "sharejs.fullname" . }}
+        - name: secret
+          secret:
+            secretName: {{ template "sharejs.fullname" . }}
+        {{- if and .Values.tls.enabled .Values.tls.files }}
+        - name: certs
+          emptyDir: {}
+        {{- end }}
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}

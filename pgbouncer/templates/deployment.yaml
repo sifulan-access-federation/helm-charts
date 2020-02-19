@@ -1,0 +1,130 @@
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "pgbouncer.fullname" . }}
+  labels:
+    app: {{ template "pgbouncer.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "pgbouncer.name" . }}
+        release: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+{{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '9127'
+{{- end }}
+    spec:
+      affinity:
+        {{- if .Values.additionalAffinities }}
+        {{- toYaml .Values.additionalAffinities | nindent 8 }}
+        {{- end }}
+        {{- if eq .Values.antiAffinity "hard" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: {{ template "pgbouncer.name" . }}
+                  release: "{{ .Release.Name }}"
+        {{- else if eq .Values.antiAffinity "soft" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: {{ template "pgbouncer.name" . }}
+                    release: "{{ .Release.Name }}"
+        {{- end }}
+      containers:
+        - name: pgbouncer
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - pgbouncer
+            - -u
+            - pgbouncer
+            - /etc/pgbouncer/pgbouncer.ini
+          env:
+            {{- include "pgbouncer.environment" . | nindent 12 }}
+          ports:
+            - name: {{ .Values.service.name }}
+              containerPort: {{ .Values.service.internalPort }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.service.internalPort }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.service.internalPort }}
+          volumeMounts:
+            - name: secret
+              subPath: userlist.txt
+              mountPath: /etc/pgbouncer/userlist.txt
+              readOnly: true
+            - name: secret
+              subPath: pgbouncer.ini
+              mountPath: /etc/pgbouncer/pgbouncer.ini
+              readOnly: true
+            - name: secret
+              subPath: pg_root.crt
+              mountPath: /etc/pgbouncer/pg_root.crt
+              readOnly: true
+            - name: secret
+              subPath: postgresql.key
+              mountPath: /etc/pgbouncer/postgresql.key
+              readOnly: true
+            - name: secret
+              subPath: postgresql.crt
+              mountPath: /etc/pgbouncer/postgresql.crt
+              readOnly: true
+            - name: secret
+              subPath: server.key
+              mountPath: /etc/pgbouncer/server.key
+              readOnly: true
+            - name: secret
+              subPath: server.crt
+              mountPath: /etc/pgbouncer/server.crt
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+{{- if .Values.metrics.enabled }}
+        - name: metrics
+          image: "{{ .Values.metrics.image.repository }}:{{ .Values.metrics.image.tag }}"
+          imagePullPolicy: {{ .Values.metrics.image.pullPolicy }}
+          env:
+{{- range $key, $value := .Values.metricsEnvs }}
+            - name: {{ $key }}
+              value: {{ $value }}
+{{- end }}
+          ports:
+            - name: metrics
+              containerPort: 9127
+          livenessProbe:
+            exec:
+              command:
+                - pgbouncer_exporter
+                - health
+          readinessProbe:
+            exec:
+              command:
+                - pgbouncer_exporter
+                - health
+          resources:
+            {{- toYaml .Values.metrics.resources | nindent 12 }}
+{{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "pgbouncer.fullname" . }}
+        - name: secret
+          secret:
+            secretName: {{ template "pgbouncer.fullname" . }}

@@ -1,0 +1,22 @@
+enabled: true
+
+ember:
+  nameOverride: osf-reviews
+  replicaCount: 1
+ 
+  image:
+    repository: quay.io/centerforopenscience/osf-reviews
+    tag: develop
+    pullPolicy: Always
+
+  resources: {}
+
+  nginx:
+    image:
+      repository: nginx
+      tag: alpine
+      pullPolicy: Always
+
+    resources: {}
+
+  configFiles: {}

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "hubot.fullname" . }}
+  labels:
+    app: {{ template "hubot.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+data:
+{{- define "hubot.inlineconfigs" }}
+{{- end }}
+{{- define "hubot.fileconfigs" -}}
+{{- range $path, $bytes := .Files.Glob "files/**" }}
+{{ $path | trimPrefix "files/" }}: |-
+  {{- printf "%s" $bytes | nindent 2 }}
+{{- end -}}
+{{- end -}}
+  {{- range $key, $value := .Values.configEnvs }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- range $key, $value := merge .Values.configFiles (include "hubot.inlineconfigs" . | fromYaml) (include "hubot.fileconfigs" . | fromYaml) }}
+  {{ $key | replace "/" "-" }}: |-
+    {{- $value | nindent 4 }}
+  {{- end }}

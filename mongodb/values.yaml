@@ -1,0 +1,68 @@
+image:
+  repository: mongo
+  tag: '3.4'
+  pullPolicy: IfNotPresent
+
+antiAffinity: soft
+
+terminationGracePeriodSeconds: 60
+
+## Enable persistence using Persistent Volume Claims
+## ref: http://kubernetes.io/docs/user-guide/persistent-volumes/
+##
+persistence:
+  enabled: false
+  ## mongodb data Persistent Volume Storage Class
+  ## If defined, storageClassName: <storageClass>
+  ## If set to "", storageClassName: "", which disables dynamic provisioning
+  ## If undefined (the default) or set to null, no storageClassName spec is
+  ##   set, choosing the default provisioner.  (gp2 on AWS, standard on
+  ##   GKE, AWS & OpenStack)
+  ##
+  # storageClass: ''
+  accessModes:
+    - ReadWriteOnce
+  size: 8Gi
+
+## Configure resource requests and limits
+## ref: http://kubernetes.io/docs/user-guide/compute-resources/
+##
+resources: {}
+#  requests:
+#    memory: 256Mi
+#    cpu: 100m
+
+configEnvs:
+  MONGODB_DATABASE: ''
+
+secretEnvs:
+  MONGODB_USERNAME: ''
+  MONGODB_ROOT_PASSWORD: ''
+  MONGODB_PASSWORD: ''
+
+## TLS (SSL) configuration
+## https://docs.mongodb.com/manual/tutorial/configure-ssl/
+tls:
+  enabled: false
+  files:
+    ## cat mongodb-cert.key mongodb-cert.crt > mongodb.pem
+    mongodb.pem: |-
+      ...
+    ca.pem: |-
+      ...
+    ca-crl.pem: |-
+      ...
+    client.pem: |-
+      ...
+
+
+## Kubernetes service type
+service:
+  name: mongodb
+  type: ClusterIP
+  # If using type: LoadBalancer
+  #loadBalancerIP: 0.0.0.0
+  #loadBalancerSourceRanges:
+  #  - 0.0.0.0/0
+  externalPort: 27017
+  internalPort: mongodb

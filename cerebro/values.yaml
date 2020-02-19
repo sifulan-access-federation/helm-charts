@@ -1,0 +1,107 @@
+# Default values for elasticsearch.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+image:
+  repository: quay.io/centerforopenscience/cerebro
+  tag: master # refers to v0.7
+  pullPolicy: Always
+
+heapSize: "128m"
+
+resources:
+  limits:
+    cpu: "1"
+    memory: "512Mi"
+  requests:
+    cpu: "25m"
+    memory: "256Mi"
+
+tls:
+  enabled: false
+  #files:
+  #  # Certificate Authority certificates
+  #  ca_chain.pem: >-
+  #    ...
+  #  # Client Certificate and Private Key
+  #  client.pem: >-
+  #    ...
+  #base64Files:
+  #  # Certificate Authority certificates
+  #  trust.jks: >-
+  #    ...
+  #  # Client Certificate and Private Key
+  #  client.jks: >-
+  #    ...
+
+secrets:
+  application.conf: |
+    # Secret will be used to sign session cookies, CSRF tokens and for other encryption utilities.
+    # It is highly recommended to change this value before running cerebro in production.
+    secret = "ki:s:[[@=Ag?QI`W2jMwkY:eqvrJ]JqoJyi2axj3ZvOv^/KavOT4ViJSv?6YY4[N"
+
+    # Application base path
+    basePath = "/"
+
+    # Defaults to RUNNING_PID at the root directory of the app.
+    # To avoid creating a PID file set this value to /dev/null
+    #pidfile.path = "/var/run/cerebro.pid"
+    pidfile.path=/dev/null
+
+    # Rest request history max size per user
+    rest.history.size = 50 // defaults to 50 if not specified
+
+    # Path of local database file
+    #data.path: "/var/lib/cerebro/cerebro.db"
+    data.path = "./cerebro.db"
+
+    # Authentication
+    auth = {
+      # Example of LDAP authentication
+      #type: ldap
+        #settings: {
+          #url = "ldap://host:port"
+          #base-dn = "ou=active,ou=Employee"
+          #method  = "simple"
+          #user-domain = "domain.com"
+        #}
+      # Example of simple username/password authentication
+      #type: basic
+        #settings: {
+          #username = "admin"
+          #password = "1234"
+        #}
+    }
+
+    # A list of known hosts
+    hosts = [
+      #{
+      #  host = "http://localhost:9200"
+      #  name = "Some Cluster"
+      #},
+      # Example of host with authentication
+      #{
+      #  host = "http://some-authenticated-host:9200"
+      #  name = "Secured Cluster"
+      #  auth = {
+      #    username = "username"
+      #    password = "secret-password"
+      #  }
+      #}
+    ]
+
+    #play.ws.ssl {
+    #  #loose = {
+    #  #  disableHostnameVerification: true
+    #  #}
+    #  keyManager = {
+    #    stores = [
+    #      { path: /certs/client.jks, password: "123456" }
+    #    ]
+    #  }
+    #  trustManager = {
+    #    stores = [
+    #      { path: /certs/trust.jks }
+    #    ]
+    #  }
+    #}

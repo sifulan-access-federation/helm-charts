@@ -1,0 +1,1086 @@
+image:
+  repository: quay.io/centerforopenscience/osf
+  tag: develop
+  pullPolicy: Always
+
+nginx:
+  image:
+    repository: quay.io/centerforopenscience/nginx
+    tag: latest
+    pullPolicy: Always
+
+networkPolicy:
+  enabled: false
+
+admin:
+  enabled: true
+  name: admin
+  replicaCount: 1
+
+  antiAffinity: soft
+
+  budget:
+    minAvailable: 0
+
+  nginx:
+    workerCount: 1
+    modules: []
+      # - modules/path/to/dynamic_module.so
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: 256Mi
+      # requests:
+      #   cpu: 100m
+      #   memory: 128Mi
+    volumeMounts: []
+    proxySourceRanges: []
+      # - 130.211.0.0/22
+      # - 35.191.0.0/16
+    realIpHeader: X-Real-IP
+    realIpRecursive: "off"
+    vts:
+      enabled: false
+      internalPort: 18080
+      statusZoneSize: 10m
+      defaultFilterKey: "$geoip_country_code country::*"
+
+  apache:
+    enabled: false
+    image:
+      repository: quay.io/centerforopenscience/shibboleth-sp
+      tag: latest
+      pullPolicy: Always
+    resources: {}
+      #limits:
+      #  cpu: 1
+      #  memory: 128Mi
+      #requests:
+      #  cpu: 100m
+      #  memory: 128Mi
+    configEnvs: {}
+    configFiles: {}
+    secretEnvs: {}
+    secretFiles: {}
+      # shibboleth/incommon-idp-signature.pem: |-
+        
+      # shibboleth/sp-cert.pem: |-
+        
+      # shibboleth/sp-key.pem: |-
+        
+      # shibboelth/shibboleth2.xml: |-
+
+    shibboleth:
+      ds_url: "https://test-ds.gakunin.nii.ac.jp/WAYF/"
+      embedded_ds: "https://test-ds.gakunin.nii.ac.jp/WAYF/embedded-wayf.js"
+
+  resources: {}
+    # limits:
+    #   cpu: "1"
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 256Mi
+
+  uwsgi:
+    workerCount: 1
+
+  horizontalPodAutoscaler:
+    enabled: false
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 90
+
+  service:
+    name: http
+    type: ClusterIP
+    externalPort: 8000
+    internalPort: 80
+
+  ingress:
+    enabled: false
+    annotations: {}
+    #   kubernetes.io/ingress.class: nginx
+    #   kubernetes.io/tls-acme: 'true'
+    paths:
+      - /
+    hosts: []
+    #   - example.domain.com
+    tls: []
+      # - secretName: example-tls
+      #   hosts:
+      #     - example.domain.com
+
+  certificate:
+    enabled: false
+    name: cert
+    # WORKAROUND: Ingress deploy blocked to GLBC due to race condition w/ missing TLS certificate
+    # - Issue: https://github.com/jetstack/cert-manager/issues/606
+    # - PR: https://github.com/kubernetes/ingress-gce/pull/388
+    tls: true
+    # issuerRef:
+    #   name: letsencrypt-prod
+    #   kind: ClusterIssuer
+    # commonName: example.org
+    # dnsNames:
+    #   - example.org
+    #   - subdomain.example.org
+    # acmeConfig:
+    #   http01: {}
+    #     # ingress: ''
+    #   domains:
+    #     - example.org
+    #     - subdomain.example.org
+
+  persistence:
+    enabled: false
+    ## A manually managed Persistent Volume and Claim
+    ## Requires persistence.enabled: true
+    ## If defined, PVC must be created manually before volume will be bound
+    # existingClaim:
+    # storageClass: ssd
+    accessMode: ReadWriteOnce
+    size: 4Gi
+
+  ## Node labels for component pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector: {}
+
+  env:
+    ALLOWED_HOSTS: "*"
+
+  volumeMounts: []
+
+api:
+  enabled: true
+  name: api
+  replicaCount: 1
+
+  antiAffinity: soft
+
+  budget:
+    minAvailable: 0
+
+  nginx:
+    workerCount: 1
+    modules: []
+      # - modules/path/to/dynamic_module.so
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: 256Mi
+      # requests:
+      #   cpu: 100m
+      #   memory: 128Mi
+    volumeMounts: []
+    proxySourceRanges: []
+      # - 130.211.0.0/22
+      # - 35.191.0.0/16
+    realIpHeader: X-Real-IP
+    realIpRecursive: "off"
+    vts:
+      enabled: false
+      internalPort: 18080
+      statusZoneSize: 10m
+      defaultFilterKey: "$geoip_country_code country::*"
+
+  resources: {}
+    # limits:
+    #   cpu: "1"
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 256Mi
+
+  uwsgi:
+    workerCount: 1
+
+  horizontalPodAutoscaler:
+    enabled: false
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 90
+
+  service:
+    name: http
+    type: ClusterIP
+    externalPort: 8000
+    internalPort: 80
+
+  ingress:
+    enabled: false
+    annotations: {}
+    #   kubernetes.io/ingress.class: nginx
+    #   kubernetes.io/tls-acme: 'true'
+    paths:
+      - /
+    hosts: []
+    #   - example.domain.com
+    tls: []
+      # - secretName: example-tls
+      #   hosts:
+      #     - example.domain.com
+
+  certificate:
+    enabled: false
+    name: cert
+    # WORKAROUND: Ingress deploy blocked to GLBC due to race condition w/ missing TLS certificate
+    # - Issue: https://github.com/jetstack/cert-manager/issues/606
+    # - PR: https://github.com/kubernetes/ingress-gce/pull/388
+    tls: true
+    # issuerRef:
+    #   name: letsencrypt-prod
+    #   kind: ClusterIssuer
+    # commonName: example.org
+    # dnsNames:
+    #   - example.org
+    #   - subdomain.example.org
+    # acmeConfig:
+    #   http01: {}
+    #     # ingress: ''
+    #   domains:
+    #     - example.org
+    #     - subdomain.example.org
+
+  ## Node labels for component pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector: {}
+
+  env:
+    ALLOWED_HOSTS: "*"
+
+  volumeMounts: []
+
+beat:
+  enabled: true
+  name: beat
+
+  antiAffinity: soft
+
+  resources: {}
+    # limits:
+    #   cpu: "1"
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 256Mi
+
+  ## Node labels for component pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector: {}
+
+  env: {}
+
+  volumeMounts: []
+
+  persistence:
+    enabled: true
+    ## A manually managed Persistent Volume and Claim
+    ## Requires persistence.enabled: true
+    ## If defined, PVC must be created manually before volume will be bound
+    # existingClaim:
+    # storageClass: ssd
+    accessMode: ReadWriteOnce
+    size: 4Gi
+
+collectstatic:
+  enabled: false
+  name: collectstatic
+
+  resources: {}
+    # limits:
+    #  cpu: 100m
+    #  memory: 128Mi
+    # requests:
+    #  cpu: 100m
+    #  memory: 128Mi
+
+  ## Node labels for component pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector: {}
+
+  env: {}
+
+  volumeMounts: []
+
+migration:
+  enabled: true
+  name: migration
+
+  resources: {}
+    # limits:
+    #  cpu: 100m
+    #  memory: 128Mi
+    # requests:
+    #  cpu: 100m
+    #  memory: 128Mi
+
+  persistence:
+    enabled: false
+    ## A manually managed Persistent Volume and Claim
+    ## Requires persistence.enabled: true
+    ## If defined, PVC must be created manually before volume will be bound
+    # existingClaim:
+    # storageClass: ssd
+    accessMode: ReadWriteOnce
+    size: 4Gi
+
+  ## Node labels for component pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector: {}
+
+  env: {}
+
+  volumeMounts: []
+
+web:
+  enabled: true
+  name: web
+  replicaCount: 1
+
+  antiAffinity: soft
+
+  budget:
+    minAvailable: 0
+
+  nginx:
+    workerCount: 1
+    cache:
+      enabled: false
+      guids: []
+        # - di8cg
+      cookieName: <change_me>
+    institutionDomains: []
+    preprintDomains: []
+    preprintDomainRedirects: {}
+      # providerId: domain.org
+    modules: []
+      # - modules/path/to/dynamic_module.so
+    additionalRewrites: []
+      # - rewrite "^/di8cg/{0,1}" https://$host/s9tya permanent;
+    # additionalConfig: |-
+    #   ...
+    preprintRewrites: []
+      # - rewrite (?i)^/preprints/oldarxiv/(.*)? /preprints/newarxiv/$1 permanent;
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: 256Mi
+      # requests:
+      #   cpu: 100m
+      #   memory: 128Mi
+    volumeMounts: []
+    proxySourceRanges: []
+      # - 130.211.0.0/22
+      # - 35.191.0.0/16
+    realIpHeader: X-Real-IP
+    realIpRecursive: "off"
+    vts:
+      enabled: false
+      internalPort: 18080
+      statusZoneSize: 10m
+      defaultFilterKey: "$geoip_country_code country::*"
+    readTimeout: 60 # http://nginx.org/en/docs/http/ngx_http_uwsgi_module.html#uwsgi_read_timeout
+    redirects:
+      enabled: false
+      domains: []
+        # - to: example.com
+        #   from:
+        #     - www.example.com
+        #     - another.domain.com
+
+  resources: {}
+    # limits:
+    #   cpu: "1"
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 256Mi
+
+  uwsgi:
+    workerCount: 1
+
+  horizontalPodAutoscaler:
+    enabled: false
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 90
+
+  service:
+    name: http
+    type: ClusterIP
+    externalPort: 5000
+    internalPort: 80
+
+  ingress:
+    enabled: false
+    annotations: {}
+    #   kubernetes.io/ingress.class: nginx
+    #   kubernetes.io/tls-acme: 'true'
+    paths:
+      - /
+    hosts: []
+    #   - example.domain.com
+    tls: []
+      # - secretName: example-tls
+      #   hosts:
+      #     - example.domain.com
+
+  shibboleth:
+    ds_url: "https://test-ds.gakunin.nii.ac.jp/WAYF/"
+    embedded_ds: "https://test-ds.gakunin.nii.ac.jp/WAYF/embedded-wayf.js"
+
+  certificate:
+    enabled: false
+    name: cert
+    # WORKAROUND: Ingress deploy blocked to GLBC due to race condition w/ missing TLS certificate
+    # - Issue: https://github.com/jetstack/cert-manager/issues/606
+    # - PR: https://github.com/kubernetes/ingress-gce/pull/388
+    tls: true
+    # issuerRef:
+    #   name: letsencrypt-prod
+    #   kind: ClusterIssuer
+    # commonName: example.org
+    # dnsNames:
+    #   - example.org
+    #   - subdomain.example.org
+    acmeConfig:
+      http01: {}
+        # ingress: ''
+      domains:
+        - example.org
+        - subdomain.example.org
+
+  additionalCertificates: []
+    # - name: example-org-cert
+    #   commonName: example.org
+    #   dnsNames:
+    #     - example.org
+    #     - submdomain.example.org
+    #   issuerRef:
+    #     name: letsencrypt-prod
+    #     kind: ClusterIssuer
+    #   acmeConfig:
+    #     http01: {}
+    #       # ingress: ''
+    #     domains:
+    #       - example.org
+    #       - subdomain.example.org
+
+  ## Node labels for component pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector: {}
+
+  env: {}
+
+  volumeMounts: []
+    # - mountPath: /etc/ssl/certs/ca-chain.cert.pem
+    #   name: secret
+    #   subPath: worker-ca.cert.pem
+    #   readOnly: true
+    # - mountPath: /etc/ssl/certs/worker.pem
+    #   name: secret
+    #   subPath: worker.pem
+    #   readOnly: true
+    # - mountPath: /etc/ssl/private/worker.key
+    #   name: secret
+    #   subPath: worker.key
+    #   readOnly: true
+
+task:
+  enabled: false
+  name: task
+  replicaCount: 1
+
+  antiAffinity: soft
+
+  budget:
+    minAvailable: 0
+
+  concurrency: 2
+  logLevel: INFO
+  # maxTasksPerChild: 5
+  # queues: logged-tasks
+
+  resources: {}
+    # limits:
+    #   cpu: "2"
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 256Mi
+
+  ## Node labels for component pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector: {}
+
+  env: {}
+
+  volumeMounts: []
+
+  persistence:
+    enabled: true
+    # storageClass:
+    accessMode: ReadWriteOnce
+    size: 10Gi
+
+worker:
+  enabled: true
+  name: worker
+  replicaCount: 1
+
+  antiAffinity: soft
+
+  budget:
+    minAvailable: 0
+
+  concurrency: 1
+  logLevel: INFO
+  # maxTasksPerChild: 5
+  # queues: non-logged-tasks
+
+  resources: {}
+    # limits:
+    #   cpu: "1"
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 256Mi
+
+  horizontalPodAutoscaler:
+    enabled: false
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 90
+
+  ## Node labels for component pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector: {}
+
+  env: {}
+
+  volumeMounts: []
+
+configEnvs:
+  DEBUG: ""
+  # GEVENT: "1"
+
+configFiles: {}
+  # Override configmap files here (and delete the {} above), e.g.:
+  #robots.txt: |-
+  #  User-agent: *
+  #  Disallow: /
+
+secretEnvs: {}
+  # SENDGRID_API_KEY: ""
+  # RAVEN_DSN: ""
+
+secretFiles: {}
+  # admin-local.py: |-
+  #   ...
+  # api-local.py: |-
+  #   ...
+  # web-local.py: |-
+  #   ...
+  # addons-bitbucket-local.py: |-
+  #   ...
+  # addons-box-local.py: |-
+  #   ...
+  # addons-dataverse-local.py: |-
+  #   ...
+  # addons-dropbox-local.py: |-
+  #   ...
+  # addons-figshare-local.py: |-
+  #   ...
+  # addons-github-local.py: |-
+  #   ...
+  # addons-gitlab-local.py: |-
+  #   ...
+  # addons-googledrive-local.py: |-
+  #   ...
+  # addons-mendeley-local.py: |-
+  #   ...
+  # addons-onedrive-local.py: |-
+  #   ...
+  # addons-osfstorage-local.py: |-
+  #   ...
+  # addons-s3-local.py: |-
+  #   ...
+  # addons-wiki-local.py: |-
+  #   ...
+  # addons-zotero-local.py: |-
+  #   ...
+  # googleAppCreds.json: |-
+  #   ...
+
+volumeMounts:
+  - mountPath: /code/admin/base/settings/local.py
+    name: secret
+    subPath: admin-local.py
+    readOnly: true
+  - mountPath: /code/api/base/settings/local.py
+    name: secret
+    subPath: api-local.py
+    readOnly: true
+  - mountPath: /code/website/settings/local.py
+    name: secret
+    subPath: web-local.py
+    readOnly: true
+  - mountPath: /code/addons/bitbucket/settings/local.py
+    name: secret
+    subPath: addons-bitbucket-local.py
+    readOnly: true
+  - mountPath: /code/addons/box/settings/local.py
+    name: secret
+    subPath: addons-box-local.py
+    readOnly: true
+  - mountPath: /code/addons/dataverse/settings/local.py
+    name: secret
+    subPath: addons-dataverse-local.py
+    readOnly: true
+  - mountPath: /code/addons/dropbox/settings/local.py
+    name: secret
+    subPath: addons-dropbox-local.py
+    readOnly: true
+  - mountPath: /code/addons/figshare/settings/local.py
+    name: secret
+    subPath: addons-figshare-local.py
+    readOnly: true
+  - mountPath: /code/addons/github/settings/local.py
+    name: secret
+    subPath: addons-github-local.py
+    readOnly: true
+  - mountPath: /code/addons/gitlab/settings/local.py
+    name: secret
+    subPath: addons-gitlab-local.py
+    readOnly: true
+  - mountPath: /code/addons/googledrive/settings/local.py
+    name: secret
+    subPath: addons-googledrive-local.py
+    readOnly: true
+  - mountPath: /code/addons/mendeley/settings/local.py
+    name: secret
+    subPath: addons-mendeley-local.py
+    readOnly: true
+  - mountPath: /code/addons/onedrive/settings/local.py
+    name: secret
+    subPath: addons-onedrive-local.py
+    readOnly: true
+  - mountPath: /code/addons/osfstorage/settings/local.py
+    name: secret
+    subPath: addons-osfstorage-local.py
+    readOnly: true
+  - mountPath: /code/addons/s3/settings/local.py
+    name: secret
+    subPath: addons-s3-local.py
+    readOnly: true
+  - mountPath: /code/addons/wiki/settings/local.py
+    name: secret
+    subPath: addons-wiki-local.py
+    readOnly: true
+  - mountPath: /code/addons/zotero/settings/local.py
+    name: secret
+    subPath: addons-zotero-local.py
+    readOnly: true
+  - mountPath: /etc/googleAppCreds.json
+    name: secret
+    subPath: googleAppCreds.json
+    readOnly: true
+
+osf-preprints:
+  enabled: false
+  service:
+    name: preprints
+    externalPort: 80
+
+osf-reviews:
+  enabled: false
+  service:
+    name: reviews
+    externalPort: 80
+
+osf-web:
+  enabled: false
+  service:
+    name: osfweb
+    externalPort: 80
+
+prerender:
+  enabled: false
+  service:
+    name: prerender
+    externalPort: 3000
+
+sharejs:
+  enabled: false
+  service:
+    name: sharejs
+    externalPort: 7007
+  ingress:
+    path: /sharejs
+
+share:
+  url: https://staging-share.osf.io
+
+# Client-side TLS
+tls:
+  enabled: false
+
+  elasticsearch:
+    enabled: false
+    mountPath: /var/www/.elasticsearch
+    files:
+      cacert.pem: |-
+        
+      client_cert.pem: |-
+        
+      client_key.pem: |-
+        
+
+  elasticsearch6:
+    enabled: false
+    mountPath: /var/www/.elasticsearch6
+    files:
+      cacert.pem: |-
+        
+      client_cert.pem: |-
+        
+      client_key.pem: |-
+        
+
+  postgresql:
+    enabled: false
+    mountPath: /var/www/.postgresql
+    files:
+      # Root Certificate
+      root.crt: |-
+
+      # Root Certificate Revocation List
+      root.crl: |-
+        
+      # Database key
+      postgresql.key: |-
+        
+      # Database certificate
+      postgresql.crt: |-
+  
+  rabbitmq:
+    enabled: false
+    mountPath: /var/www/.rabbitmq
+    files:
+      worker.key: |-
+        
+      worker.pem: |-
+        
+      ca-chain.cert.pem: |-
+        
+
+  mongodb:
+    enabled: false
+    mountPath: /var/www/.mongodb
+    files:
+      ca.pem: |-
+        
+      crl.pem: |-
+        
+      client.pem: |-
+        
+      key.pem: |-
+
+maintenance:
+  enabled: false
+
+postgresql:
+  enabled: false
+
+  image: "postgres"
+  imageTag: "9.6"
+
+  ## Specify a imagePullPolicy
+  ## 'Always' if imageTag is 'latest', else set to 'IfNotPresent'
+  ## ref: http://kubernetes.io/docs/user-guide/images/#pre-pulling-images
+  ##
+  # imagePullPolicy:
+
+  ## Create a database user
+  ## Default: postgres
+  postgresUser: postgres
+
+  # Default: random 10 character string
+  postgresPassword: osf
+
+  ## Create a database
+  ## Default: the postgres user
+  postgresDatabase: osf
+
+  # Specify initdb arguments, e.g. --data-checksums
+  # ref: https://github.com/docker-library/docs/blob/master/postgres/content.md#postgres_initdb_args
+  # ref: https://www.postgresql.org/docs/current/static/app-initdb.html
+  postgresInitdbArgs: --data-checksums
+
+  ## Persist data to a persitent volume
+  persistence:
+    enabled: true
+
+    ## A manually managed Persistent Volume and Claim
+    ## Requires persistence.enabled: true
+    ## If defined, PVC must be created manually before volume will be bound
+    # existingClaim:
+
+    ## If defined, volume.beta.kubernetes.io/storage-class: <storageClass>
+    ## Default: volume.alpha.kubernetes.io/storage-class: default
+    ##
+    # storageClass: ssd
+    accessMode: ReadWriteOnce
+    size: 25Gi
+    subPath: "postgresql-db"
+
+  metrics:
+    enabled: false
+
+  resources: {}
+    # limits:
+    #  cpu: "1"
+    #  memory: 256Mi
+    # requests:
+    #  cpu: 100m
+    #  memory: 256Mi
+
+rabbitmq:
+  enabled: false
+
+  image:
+    repository: rabbitmq
+    tag: 3-management
+    pullPolicy: IfNotPresent
+
+  configEnvs:
+    #RABBITMQ_NODENAME: rabbit@localhost
+    RABBITMQ_NODE_TYPE: stats
+    RABBITMQ_CLUSTER_NODE_NAME: ''
+    RABBITMQ_VHOST: /
+
+  secretEnvs:
+    ## ref: https://github.com/bitnami/bitnami-docker-rabbitmq/blob/master/README.md#creating-a-database-user-on-first-run
+    RABBITMQ_USERNAME: 'osf'
+    ## ref: https://github.com/bitnami/bitnami-docker-rabbitmq/blob/master/README.md#creating-a-database-user-on-first-run
+    RABBITMQ_PASSWORD: 'osf'
+    ## Erlang cookie to determine whether different nodes are allowed to communicate with each other
+    RABBITMQ_ERLANG_COOKIE: cookie
+
+  service:
+    type: ClusterIP
+
+  persistence:
+    enabled: true
+    storageClass: ''
+    accessMode: ReadWriteOnce
+    size: 8Gi
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+elasticsearch:
+  enabled: false
+
+  image:
+    repository: "quay.io/centerforopenscience/elasticsearch"
+    tag: "2.4"
+    pullPolicy: "Always"
+
+  rbac:
+
+  cluster:
+    env:
+      MINIMUM_MASTER_NODES: "1"
+      EXPECTED_MASTER_NODES: "1"
+
+  client:
+    name: client
+    replicas: 1
+    serviceType: ClusterIP
+    heapSize: "128m"
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: "512Mi"
+      # requests:
+      #   cpu: "25m"
+      #   memory: "256Mi"
+
+  master:
+    name: master
+    replicas: 1
+    heapSize: "128m"
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: "512Mi"
+      # requests:
+      #   cpu: "25m"
+      #   memory: "256Mi"
+
+  data:
+    name: data
+    replicas: 1
+    heapSize: "1536m"
+    storage: "30Gi"
+    # storageClass: "ssd"
+    terminationGracePeriodSeconds: 3600
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: "512Mi"
+      # requests:
+      #   cpu: "25m"
+      #   memory: "256Mi"
+
+elasticsearch6:
+  enabled: false
+
+  image:
+    repository: "quay.io/centerforopenscience/elasticsearch"
+    tag: "6.4.1"
+    pullPolicy: "Always"
+
+  rbac:
+
+  cluster:
+    env:
+      MINIMUM_MASTER_NODES: "1"
+      EXPECTED_MASTER_NODES: "1"
+
+  client:
+    name: client
+    replicas: 1
+    serviceType: ClusterIP
+    heapSize: "128m"
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: "512Mi"
+      # requests:
+      #   cpu: "25m"
+      #   memory: "256Mi"
+
+  master:
+    name: master
+    replicas: 1
+    heapSize: "128m"
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: "512Mi"
+      # requests:
+      #   cpu: "25m"
+      #   memory: "256Mi"
+
+  data:
+    name: data
+    replicas: 1
+    heapSize: "1536m"
+    storage: "30Gi"
+    # storageClass: "ssd"
+    terminationGracePeriodSeconds: 3600
+    resources: {}
+      # limits:
+      #   cpu: "1"
+      #   memory: "512Mi"
+      # requests:
+      #   cpu: "25m"
+      #   memory: "256Mi"
+
+redis:
+  enabled: false
+  
+  image:
+    repository: redis
+    tag: alpine
+    pullPolicy: IfNotPresent
+
+  secretEnvs: {}
+    # REDIS_PASSWORD: ''
+
+  ## Redis command arguments
+  ##
+  ## Can be used to specify command line arguments, for example:
+  ##
+  ## args:
+  ##  - --maxmemory 200mb
+  ##  - --maxmemory-policy volatile-ttl
+  args:
+
+  ## Enable persistence using Persistent Volume Claims
+  ## ref: http://kubernetes.io/docs/user-guide/persistent-volumes/
+  ##
+  persistence:
+    enabled: false
+
+    ## A manually managed Persistent Volume and Claim
+    ## Requires persistence.enabled: true
+    ## If defined, PVC must be created manually before volume will be bound
+    # existingClaim:
+
+    ## redis data Persistent Volume Storage Class
+    ## If defined, storageClassName: <storageClass>
+    ## If set to "-", storageClassName: "", which disables dynamic provisioning
+    ## If undefined (the default) or set to null, no storageClassName spec is
+    ##   set, choosing the default provisioner.  (gp2 on AWS, standard on
+    ##   GKE, AWS & OpenStack)
+    ##
+    # storageClass: "-"
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+
+  ## Configure resource requests and limits
+  ## ref: http://kubernetes.io/docs/user-guide/compute-resources/
+  ##
+  resources: {}
+    #limits:
+    #  cpu: 100m
+    #  memory: 256Mi
+    #requests:
+    #  cpu: 100m
+    #  memory: 256Mi
+
+  metrics:
+    enabled: false
+    image:
+      repository: oliver006/redis_exporter
+      tag: v0.11
+      pullPolicy: IfNotPresent
+    port: 9121
+    resources: {}
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9121"
+
+  service:
+    type: ClusterIP
+    loadBalancerIP:
+    #annotations: {}
+    # If using type: LoadBalancer
+    #loadBalancerIP: 0.0.0.0
+    #loadBalancerSourceRanges:
+    #  - 0.0.0.0/0
+    port: 6379
+    externalIPs: []
+
+  networkPolicy:
+    ## Enable creation of NetworkPolicy resources.
+    ##
+    enabled: false
+
+    ## The Policy model to apply. When set to false, only pods with the correct
+    ## client label will have network access to the port Redis is listening
+    ## on. When true, Redis will accept connections from any source
+    ## (with the correct destination port).
+    ##
+    allowExternal: true

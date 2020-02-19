@@ -1,0 +1,42 @@
+{{- if .Values.web.ingress.enabled -}}
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: {{ template "share.web.fullname" . }}
+  labels:
+    app: {{ template "share.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    component: "{{ .Values.web.name }}"
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+  {{- if .Values.web.ingress.annotations }}
+  annotations:
+    {{- toYaml .Values.web.ingress.annotations | nindent 4 }}
+  {{- end }}
+spec: 
+  rules:
+    {{- range .Values.web.ingress.hosts }}
+    - host: {{ . }}
+      http:
+        paths:
+          {{- range $.Values.web.ingress.paths }}
+          - path: {{ . }}
+            backend:
+              serviceName: {{ include "share.web.fullname" $ }}
+              servicePort: {{ $.Values.web.service.name }}
+          {{- end -}}
+    {{- end -}}
+  {{- if (or .Values.web.ingress.tls (and .Values.web.certificate.enabled .Values.web.certificate.tls)) }}
+  tls:
+    {{- if .Values.web.ingress.tls }}
+    {{- toYaml .Values.web.ingress.tls | nindent 4 }}
+    {{- end -}}
+    {{- if (and .Values.web.certificate.enabled .Values.web.certificate.tls) }}
+    - secretName: "{{ template "share.web.certificate.fullname" . }}"
+      hosts:
+        {{- range .Values.web.certificate.acmeConfig.domains }}
+        - {{ . }}
+        {{- end }}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
